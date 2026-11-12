@@ -71,12 +71,23 @@ public sealed class OverlayController : IDisposable
 
     // Live FPS HUD state: rolling ring of last frame periods (ticks) + the text
     // last painted, so the compositor can dirty just the HUD rect on change.
+    // Draw/present/wait sample rings ride the same cursor to attribute jitter.
     private readonly long[] _framePeriodTicks = new long[128];
+    private readonly long[] _drawTicksRing = new long[128];
+    private readonly long[] _presentTicksRing = new long[128];
+    private readonly long[] _waitTicksRing = new long[128];
+    private long _lastWaitTicks;
     private int _framePeriodHead;
     private int _framePeriodCount;
     private long _lastFrameTs;
     private string _lastRenderedHud = "";
     private string _fpsHud = "";
+
+    /// <summary>Recent per-frame composition statistics (fpscheck + HUD source).</summary>
+    public sealed record FrameStats(
+        double PeriodP95Ms, double PeriodMaxMs,
+        double DrawP95Ms, double DrawMaxMs,
+        double PresentP95Ms, double PresentMaxMs);
 
     // ---- thread-shared state ----
     private volatile bool _active;
@@ -154,6 +165,17 @@ public sealed class OverlayController : IDisposable
     // Overlay thread: message pump + composition loop
     // =====================================================================
 
+    // Measured decision (see PROGRESS.md, 12 Nov fps work): with dirty-region
+    // presents, UpdateLayeredWindowIndirect blocked 8-12 ms inside DWM redirection
+    // sync on the reference machine, causing every other frame to miss its
+    // deadline (visible hand cadence ~30 fps despite a 60 fps frame counter).
+    // A full UpdateLayeredWindow present costs the same wall time but every frame
+    // completes within budget, so the visible cadence is a true ~60 fps. Dirty
+    // draw is kept (clip limits paint work); only the present payload is whole.
+    // TH_PRESENT_FULL=0 restores dirty presents for future A/B measurements.
+    private static readonly bool PresentFull =
+        Environment.GetEnvironmentVariable("TH_PRESENT_FULL") != "0";
+
     private void OverlayLoop()
     {
         WinMM.timeBeginPeriod(1);
@@ -179,7 +201,9 @@ public sealed class OverlayController : IDisposable
                 // Accumulating ticker: targets advance on a fixed timeline so
                 // render time is part of the frame period instead of extra time on
                 // top of it (the old wait-after-render ran at ~43 fps on 4K).
+                long w0 = Stopwatch.GetTimestamp();
                 WaitUntilNextTick(intervalTicks);
+                _lastWaitTicks = Stopwatch.GetTimestamp() - w0;
             }
         }
         catch (Exception ex)
@@ -202,12 +226,17 @@ public sealed class OverlayController : IDisposable
         }
     }
 
-    /// <summary>Schedule the next tick on a running timeline; resets after long stalls instead of catch-up bursts.</summary>
+    /// <summary>Schedule the next tick on a running timeline. A frame that slightly
+    /// overruns its budget must NOT restart the timeline: the old reset-at-one-period
+    /// turned any ~18 ms frame into a 33 ms gap (full period of extra sleep), which
+    /// is exactly the periodic hitch seen on screen. Resync only after real stalls
+    /// (2+ periods late); small overruns catch up on the next immediate tick.
+    /// </summary>
     private void WaitUntilNextTick(long intervalTicks)
     {
         long now = Stopwatch.GetTimestamp();
-        if (_nextTick == 0 || _nextTick < now - intervalTicks)
-            _nextTick = now + intervalTicks; // first tick, or mode change / long stall: restart the timeline
+        if (_nextTick == 0 || _nextTick < now - 2 * intervalTicks)
+            _nextTick = now + intervalTicks; // first tick, or genuine long stall: restart the timeline
         long target = _nextTick;
         _nextTick += intervalTicks;
 
@@ -471,7 +500,7 @@ public sealed class OverlayController : IDisposable
                 long d0 = Stopwatch.GetTimestamp();
                 _scene.Draw(part.Surface.Graphics, part.Monitor, snapshot, clip);
                 long d1 = Stopwatch.GetTimestamp();
-                bool presented = clip is null
+                bool presented = PresentFull || clip is null
                     ? part.Surface.PresentToRedirected(part.Window.Handle)
                     : part.Surface.PresentDirtyToRedirected(part.Window.Handle, clip.Value);
                 long d2 = Stopwatch.GetTimestamp();
@@ -499,6 +528,9 @@ public sealed class OverlayController : IDisposable
         if (_lastFrameTs != 0)
         {
             _framePeriodTicks[_framePeriodHead] = ts - _lastFrameTs;
+            _drawTicksRing[_framePeriodHead] = drawTicksAcc;
+            _presentTicksRing[_framePeriodHead] = presentTicksAcc;
+            _waitTicksRing[_framePeriodHead] = _lastWaitTicks;
             _framePeriodHead = (_framePeriodHead + 1) & (_framePeriodTicks.Length - 1);
             if (_framePeriodCount < _framePeriodTicks.Length) _framePeriodCount++;
         }
@@ -526,26 +558,61 @@ public sealed class OverlayController : IDisposable
                 : $"TinyHand M1 | mode {(_clickThrough ? "click-through" : "draw")} | {_fps} fps | Ctrl+Alt+H toggle | Esc close | Ctrl+Alt+Q exit app";
             _statusRefreshAt = now + 250;
 
-            var (p95, max) = FramePeriodStatsMs();
+            var stats = FrameStatsSnapshot();
             _fpsHud = busy
-                ? $"{_fps} fps | p95 {p95:0.0} / max {max:0.0} ms | draw {DrawAvgMs:0.0} / present {PresentAvgMs:0.0}"
-                : $"{_fps} fps idle | p95 {p95:0.0} / max {max:0.0} ms";
+                ? $"{_fps} fps | p95 {stats.PeriodP95Ms:0.0} / max {stats.PeriodMaxMs:0.0} ms | draw {DrawAvgMs:0.0} / present {PresentAvgMs:0.0}"
+                : $"{_fps} fps idle | p95 {stats.PeriodP95Ms:0.0} / max {stats.PeriodMaxMs:0.0} ms";
         }
         _lastRenderedStatus = snapshot.Status;
         _lastRenderedHud = snapshot.FpsHud;
     }
 
-    /// <summary>p95 and max of recent frame periods in ms (sorted copy of the ring).</summary>
-    private (double p95, double max) FramePeriodStatsMs()
+    /// <summary>p95/max of period, draw and present over the recent frame ring. Public for fpscheck.</summary>
+    public FrameStats FrameStatsSnapshot()
     {
         int n = Math.Min(_framePeriodCount, _framePeriodTicks.Length);
-        if (n == 0) return (0, 0);
-        var arr = new long[n];
-        Array.Copy(_framePeriodTicks, arr, n);
-        Array.Sort(arr);
-        double p95 = arr[(int)Math.Round(0.95 * (n - 1))] * 1000.0 / Stopwatch.Frequency;
-        double max = arr[n - 1] * 1000.0 / Stopwatch.Frequency;
-        return (p95, max);
+        if (n == 0) return new FrameStats(0, 0, 0, 0, 0, 0);
+        var periods = new long[n];
+        var draws = new long[n];
+        var presents = new long[n];
+        Array.Copy(_framePeriodTicks, periods, n);
+        Array.Copy(_drawTicksRing, draws, n);
+        Array.Copy(_presentTicksRing, presents, n);
+        Array.Sort(periods);
+        Array.Sort(draws);
+        Array.Sort(presents);
+        double ticksToMs = 1000.0 / Stopwatch.Frequency;
+        double at(long[] arr) => arr[(int)Math.Round(0.95 * (n - 1))] * ticksToMs;
+        double mx(long[] arr) => arr[n - 1] * ticksToMs;
+        return new FrameStats(at(periods), mx(periods), at(draws), mx(draws), at(presents), mx(presents));
+    }
+
+    /// <summary>Debug: last n frame periods in ms, oldest first (fpscheck histogram source).</summary>
+    public double[] RecentFramePeriodsMs(int maxCount)
+    {
+        return RecentRingMs(_framePeriodTicks, maxCount);
+    }
+
+    /// <summary>Debug: last n present durations in ms, aligned with RecentFramePeriodsMs.</summary>
+    public double[] RecentPresentsMs(int maxCount)
+    {
+        return RecentRingMs(_presentTicksRing, maxCount);
+    }
+
+    /// <summary>Debug: last n wait durations in ms, aligned with RecentFramePeriodsMs.</summary>
+    public double[] RecentWaitsMs(int maxCount)
+    {
+        return RecentRingMs(_waitTicksRing, maxCount);
+    }
+
+    private double[] RecentRingMs(long[] ring, int maxCount)
+    {
+        int n = Math.Min(maxCount, Math.Min(_framePeriodCount, ring.Length));
+        var arr = new double[n];
+        double toMs = 1000.0 / Stopwatch.Frequency;
+        for (int i = 0; i < n; i++)
+            arr[i] = ring[(_framePeriodHead - n + ring.Length + i) % ring.Length] * toMs;
+        return arr;
     }
 
     /// <summary>
