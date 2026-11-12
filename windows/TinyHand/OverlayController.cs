@@ -48,13 +48,17 @@ public sealed class OverlayController : IDisposable
 
     // macOS OverlayController reference values. Busy target is capped by the primary
     // display's refresh rate: rendering faster than the display only burns CPU
-    // (60 Hz monitor -> ~60 fps busy, not 120).
-    private const int BusyIntervalMsBase = 1000 / 120;
+    // (60 Hz monitor -> ~60 fps busy, not 120). Interval is kept in Stopwatch ticks,
+    // NOT integer milliseconds: 1000/60 truncates to 16 ms (62.5 fps) and the 0.67 ms
+    // beat against the display's 16.67 ms period shows as periodic judder.
+    private static long TicksFromMs(double ms) => (long)Math.Round(ms * Stopwatch.Frequency / 1000.0);
+    private static long TicksFromFps(int fps) => (long)Math.Round((double)Stopwatch.Frequency / fps);
+    private readonly long _idleIntervalTicks = TicksFromMs(IdleIntervalMs);
     private const int IdleIntervalMs = 1000 / 20;
     private const long IdleAfterMs = 500;
     private const uint VkEscape = 0x1B;
 
-    private int _busyIntervalMs = BusyIntervalMsBase;
+    private long _busyIntervalTicks = TicksFromMs(1000.0 / 120);
     private long _nextTick;
 
     // Dirty-region composition state. Set on events that change pixels anywhere
@@ -153,7 +157,9 @@ public sealed class OverlayController : IDisposable
 
                 bool busy = _active && _clock.ElapsedMilliseconds - Interlocked.Read(ref _lastActivityMs) < IdleAfterMs;
                 bool render = _active && (busy || _dirty);
-                int interval = _active ? (busy ? _busyIntervalMs : IdleIntervalMs) : 25;
+                long intervalTicks = _active
+                    ? (busy ? _busyIntervalTicks : _idleIntervalTicks)
+                    : TicksFromMs(25);
 
                 if (render)
                 {
@@ -164,7 +170,7 @@ public sealed class OverlayController : IDisposable
                 // Accumulating ticker: targets advance on a fixed timeline so
                 // render time is part of the frame period instead of extra time on
                 // top of it (the old wait-after-render ran at ~43 fps on 4K).
-                WaitUntilNextTick(interval);
+                WaitUntilNextTick(intervalTicks);
             }
         }
         catch (Exception ex)
@@ -188,9 +194,8 @@ public sealed class OverlayController : IDisposable
     }
 
     /// <summary>Schedule the next tick on a running timeline; resets after long stalls instead of catch-up bursts.</summary>
-    private void WaitUntilNextTick(int intervalMs)
+    private void WaitUntilNextTick(long intervalTicks)
     {
-        long intervalTicks = (long)intervalMs * Stopwatch.Frequency / 1000;
         long now = Stopwatch.GetTimestamp();
         if (_nextTick == 0 || _nextTick < now - intervalTicks)
             _nextTick = now + intervalTicks; // first tick, or mode change / long stall: restart the timeline
@@ -322,10 +327,12 @@ public sealed class OverlayController : IDisposable
 
         // Busy composition target capped by the primary display's refresh rate:
         // presenting faster than the display only burns CPU (M1 note; full
-        // per-monitor fps management is M3).
+        // per-monitor fps management is M3). Tick precision keeps the true period:
+        // 60 Hz is 16.667 ms, an integer-ms timeline would run at 16 ms / 62.5 fps
+        // and beat against the compositor.
         int refreshHz = Monitors.CurrentMode()?.hz ?? 60;
         int busyFps = Math.Clamp(refreshHz, 60, 120);
-        _busyIntervalMs = Math.Max(BusyIntervalMsBase, 1000 / busyFps);
+        _busyIntervalTicks = TicksFromFps(busyFps);
 
         var parts = new List<OverlayPart>();
         foreach (var monitor in monitors)
