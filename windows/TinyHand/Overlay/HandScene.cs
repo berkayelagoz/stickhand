@@ -95,10 +95,10 @@ public sealed class HandScene
 
     private static void DrawToolbar(Graphics g, List<ToolbarButton> buttons, int scale)
     {
-        using var bg = new SolidBrush(Color.FromArgb(235, 28, 28, 32));
-        using var border = new Pen(Color.FromArgb(200, 255, 255, 255), scale);
+        using var bg = new SolidBrush(Color.FromArgb(245, 28, 28, 32));
+        using var border = new Pen(Color.FromArgb(255, 255, 255, 255), 2f * Math.Max(1, scale));
         using var textBrush = new SolidBrush(Color.FromArgb(255, 255, 255, 255));
-        using var font = new Font("Segoe UI", 12f * scale, FontStyle.Bold);
+        using var font = new Font("Segoe UI", 15f * scale, FontStyle.Bold);
         var format = new StringFormat
         {
             Alignment = StringAlignment.Center,

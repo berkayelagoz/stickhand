@@ -8,8 +8,14 @@ namespace TinyHand.Interop;
 /// no WM_SETCURSOR (WS_EX_TRANSPARENT removes it from hit-testing), while the
 /// contract requires the real cursor to stay hidden with the hand visible.
 ///
-/// Fallback after an abnormal exit: SystemParametersInfo(SPI_SETCURSORS) resets from
-/// the registry. Plan decision (M1): accepted as the only reliable global mechanism.
+/// Bugs fixed 2026-11-12 (both observed in the first manual test run):
+/// - The blank cursor is a 32bpp ARGB cursor with alpha 0 everywhere. A mono
+///   CreateCursor(AND=FF/XOR=00) rendered as an opaque black square.
+/// - Scheme originals are captured ONCE per process. After SetSystemCursor,
+///   LoadImage(OCR_*) returns the replaced (blank) cursor, so re-saving on every
+///   click-through episode poisoned the restore ("real cursor never comes back").
+/// - If a restore call fails, SystemParametersInfo(SPI_SETCURSORS) reloads the
+///   user's registry scheme as a fallback.
 /// </summary>
 public sealed class GlobalCursorHider : IDisposable
 {
@@ -21,6 +27,8 @@ public sealed class GlobalCursorHider : IDisposable
         Win32.OCR_APPSTARTING,
     };
 
+    private const int BlankSize = 32;
+
     private readonly Dictionary<uint, IntPtr> _saved = new();
     private IntPtr _blank;
     private bool _hidden;
@@ -30,34 +38,54 @@ public sealed class GlobalCursorHider : IDisposable
     public void HideAll()
     {
         if (_hidden) return;
-        _blank = _blank == IntPtr.Zero ? CreateBlankCursor() : _blank;
-        if (_blank == IntPtr.Zero) throw new InvalidOperationException("CreateCursor failed for blank cursor");
+        if (_blank == IntPtr.Zero) _blank = CreateBlankCursor();
+        if (_blank == IntPtr.Zero)
+            throw new InvalidOperationException($"CreateIconIndirect failed: {Marshal.GetLastWin32Error()}");
 
         foreach (uint id in CursorIds)
         {
-            // Save a private copy of the current system cursor before replacing it.
-            IntPtr current = User32.LoadImage(IntPtr.Zero, id, Win32.IMAGE_CURSOR, 0, 0, Win32.LR_SHARED);
-            if (current == IntPtr.Zero) continue;
-            _saved[id] = User32.CopyIcon(current);
+            // Save the scheme original only the first time we hide: later LoadImage
+            // calls would return our own blank cursor, not the scheme original.
+            if (!_saved.ContainsKey(id))
+            {
+                IntPtr current = User32.LoadImage(IntPtr.Zero, id, Win32.IMAGE_CURSOR, 0, 0, Win32.LR_SHARED);
+                if (current == IntPtr.Zero) continue;
+                _saved[id] = User32.CopyIcon(current);
+            }
             User32.SetSystemCursor(User32.CopyIcon(_blank), id);
         }
         _hidden = true;
     }
 
-    public void RestoreAll()
+    /// <summary>Restore the saved originals. Returns false if any SetSystemCursor call failed.</summary>
+    public bool RestoreAll()
     {
-        if (!_hidden) return;
+        if (!_hidden) return true;
+        bool ok = true;
         foreach (var (id, saved) in _saved)
         {
-            if (saved != IntPtr.Zero)
-                User32.SetSystemCursor(User32.CopyIcon(saved), id);
+            if (saved != IntPtr.Zero && !User32.SetSystemCursor(User32.CopyIcon(saved), id))
+                ok = false;
         }
         _hidden = false;
+        return ok;
     }
+
+    /// <summary>Fallback: reload the system cursors from the user's registry scheme.</summary>
+    public static void RestoreSystemScheme() =>
+        User32.SystemParametersInfo(User32.SPI_SETCURSORS, 0, IntPtr.Zero, 0);
 
     public void Dispose()
     {
-        try { RestoreAll(); }
+        try
+        {
+            if (!RestoreAll())
+                RestoreSystemScheme();
+        }
+        catch
+        {
+            try { RestoreSystemScheme(); } catch { /* last resort exhausted */ }
+        }
         finally
         {
             foreach (var saved in _saved.Values)
@@ -73,10 +101,41 @@ public sealed class GlobalCursorHider : IDisposable
 
     private static IntPtr CreateBlankCursor()
     {
-        // 8x8 AND mask all 1s + XOR mask all 0s => fully transparent cursor.
-        byte[] andMask = new byte[8];
-        byte[] xorMask = new byte[8];
-        for (int i = 0; i < andMask.Length; i++) andMask[i] = 0xFF;
-        return User32.CreateCursor(IntPtr.Zero, 0, 0, 8, 8, andMask, xorMask);
+        // 32bpp ARGB color bitmap with alpha 0 in every pixel: a fully transparent
+        // cursor (not a black square). CreateDIBSection zero-fills the bits.
+        var colorInfo = new BITMAPINFO();
+        colorInfo.bmiHeader.biSize = (uint)Marshal.SizeOf<BITMAPINFOHEADER>();
+        colorInfo.bmiHeader.biWidth = BlankSize;
+        colorInfo.bmiHeader.biHeight = -BlankSize;
+        colorInfo.bmiHeader.biPlanes = 1;
+        colorInfo.bmiHeader.biBitCount = 32;
+
+        var maskInfo = colorInfo;
+        maskInfo.bmiHeader.biBitCount = 1;
+
+        IntPtr hdc = Gdi32.CreateCompatibleDC(IntPtr.Zero);
+        IntPtr color = Gdi32.CreateDIBSection(hdc, ref colorInfo, Win32.DIB_RGB_COLORS, out _, IntPtr.Zero, 0);
+        IntPtr mask = Gdi32.CreateDIBSection(hdc, ref maskInfo, Win32.DIB_RGB_COLORS, out _, IntPtr.Zero, 0);
+        Gdi32.DeleteDC(hdc);
+        if (color == IntPtr.Zero || mask == IntPtr.Zero)
+        {
+            if (color != IntPtr.Zero) Gdi32.DeleteObject(color);
+            if (mask != IntPtr.Zero) Gdi32.DeleteObject(mask);
+            return IntPtr.Zero;
+        }
+
+        var iconInfo = new ICONINFO
+        {
+            fIcon = false, // cursor, not icon
+            xHotspot = 0,
+            yHotspot = 0,
+            hbmMask = mask,
+            hbmColor = color,
+        };
+        IntPtr cursor = User32.CreateIconIndirect(ref iconInfo);
+        // CreateIconIndirect copies the bitmaps; ours are no longer needed.
+        Gdi32.DeleteObject(mask);
+        Gdi32.DeleteObject(color);
+        return cursor;
     }
 }

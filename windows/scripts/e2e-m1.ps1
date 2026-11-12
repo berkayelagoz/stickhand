@@ -134,16 +134,18 @@ try {
     # mode now: draw
 
     # E: toolbar buttons (primary monitor, top-center, ToolbarModel geometry)
+    # Toolbar geometry — keep in sync with TinyHand/Logic/ToolbarModel.cs constants:
+    # ButtonHeightPx=56, TopMarginPx=16, GapPx=12, ToggleWidthPx=280, ExitWidthPx=120.
     $hdc = [E2E.Win]::GetDC([IntPtr]::Zero)
     $dpi = [E2E.Win]::GetDeviceCaps($hdc, 88)
     if ($dpi -lt 96) { $dpi = 96 }
     $s = [Math]::Max(1, [int][Math]::Round($dpi / 96.0, [System.MidpointRounding]::AwayFromZero))
     $screenW = [System.Windows.Forms.Screen]::PrimaryScreen.Bounds.Width
-    $totalW = (190 + 8 + 80) * $s
+    $totalW = (280 + 12 + 120) * $s
     $x0 = [Math]::Max(0, [int](($screenW - $totalW) / 2))
-    $ty = [int](12 * $s) + [int](($s * 40) / 2)
-    $cx = $x0 + [int](($s * 190) / 2)               # click_through button center
-    $ex = $x0 + (190 + 8) * $s + [int](($s * 80) / 2) # exit button center
+    $ty = [int](16 * $s) + [int](($s * 56) / 2)
+    $cx = $x0 + [int](($s * 280) / 2)                  # click_through button center
+    $ex = $x0 + (280 + 12) * $s + [int](($s * 120) / 2) # exit button center
 
     ClickAt $cx $ty  # toolbar: toggle -> click-through
     ClickAt 500 600  # must be delivered now

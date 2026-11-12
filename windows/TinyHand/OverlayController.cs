@@ -324,8 +324,17 @@ public sealed class OverlayController : IDisposable
 
     private void TryRestoreGlobalCursor()
     {
-        try { _cursorHider.RestoreAll(); }
-        catch (Exception ex) { Debug.WriteLine($"RestoreAll failed: {ex.Message}"); }
+        bool restored;
+        try { restored = _cursorHider.RestoreAll(); }
+        catch (Exception ex)
+        {
+            Debug.WriteLine($"RestoreAll failed: {ex.Message}");
+            restored = false;
+        }
+        // Saved-copy restore loses a few semi-transparent edge pixels; reloading the
+        // registry scheme (SPI_SETCURSORS) restores the cursor pixel-perfect, and is
+        // also the fallback when a SetSystemCursor call failed.
+        GlobalCursorHider.RestoreSystemScheme();
     }
 
     // =====================================================================

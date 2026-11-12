@@ -396,12 +396,22 @@ public static class User32
         byte[] pvANDPlane, byte[] pvXORPlane);
 
     [DllImport("user32.dll", SetLastError = true)]
+    public static extern IntPtr CreateIconIndirect(ref ICONINFO piconinfo);
+
+    [DllImport("user32.dll", SetLastError = true)]
     [return: MarshalAs(UnmanagedType.Bool)]
     public static extern bool DestroyCursor(IntPtr hCursor);
 
-    [DllImport("user32.dll", SetLastError = true, CharSet = CharSet.Unicode)]
+    [DllImport("user32.dll", SetLastError = true)]
     [return: MarshalAs(UnmanagedType.Bool)]
     public static extern bool EnumDisplaySettings(string? lpszDeviceName, uint iModeNum, ref DEVMODE lpDevMode);
+
+    /// <summary>SPI_SETCURSORS: reload system cursors from the user's registry scheme.</summary>
+    public const uint SPI_SETCURSORS = 0x0057;
+
+    [DllImport("user32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    public static extern bool SystemParametersInfo(uint uiAction, uint uiParam, IntPtr pvParam, uint fuWinIni);
 }
 
 public static class Gdi32

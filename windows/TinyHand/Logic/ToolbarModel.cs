@@ -10,11 +10,13 @@ public sealed record ToolbarButton(string Id, string Label, System.Drawing.Recta
 /// </summary>
 public static class ToolbarModel
 {
-    public const int ButtonHeightPx = 40;
-    public const int TopMarginPx = 12;
-    public const int GapPx = 8;
-    public const int ToggleWidthPx = 190;
-    public const int ExitWidthPx = 80;
+    // Prototype sizing (4K @100% makes a 190x40 strip hard to spot); keep in sync
+    // with scripts/e2e-m1.ps1, which mirrors this geometry for the injected clicks.
+    public const int ButtonHeightPx = 56;
+    public const int TopMarginPx = 16;
+    public const int GapPx = 12;
+    public const int ToggleWidthPx = 280;
+    public const int ExitWidthPx = 120;
 
     public static string ToggleLabel(bool clickThrough) => clickThrough ? "Click-through: ON" : "Click-through: OFF";
 
