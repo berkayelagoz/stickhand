@@ -8,8 +8,8 @@ Kaynak: macOS uygulaması (`Sources/TinyHand/`, Swift/AppKit). Hedef: özellik e
 |---|---|
 | Dil / runtime | C# / .NET 10 (LTS; .NET 8 desteği 10 Kasım 2026'da sona erdi). SDK sürümü `global.json` ile sabitlenir; CI'da açıkça kurulur |
 | Ana süreç, tray, ayarlar | WinForms (`NotifyIcon` + mesaj pompası) |
-| Overlay (monitör başına) | Ham Win32: `WS_EX_LAYERED \| WS_EX_NOACTIVATE \| WS_EX_TOPMOST` |
-| Overlay çizim | GDI+ → 32bpp ARGB → `UpdateLayeredWindow`, kompozisyon timer'ı (120 Hz busy / 20 Hz idle) |
+| Overlay (monitör başına) | Ham Win32: `WS_EX_NOREDIRECTIONBITMAP \| WS_EX_NOACTIVATE \| WS_EX_TOPMOST` + DirectComposition target/visual (M1 prototipi: `WS_EX_LAYERED` layered window; geçiş M1.5'te) |
+| Overlay çizim | Direct2D (D3D11) → DXGI flip-model swap chain → DirectComposition; kompozisyon timer'ı (busy hedef monitör yenilemesi, idle 20 Hz). M1 prototipi: GDI+ → `UpdateLayeredWindow` (M1.5'te değişir) |
 | Girdi yakalama | P/Invoke: `WH_MOUSE_LL`, `WH_KEYBOARD_LL` (`SetWindowsHookEx`); hook'lar tray/overlay pompasından izole, kendi mesaj döngüsü olan ayrı iş parçacığında |
 | İmleç gizleme | `WM_SETCURSOR` + boş imleç; `Cursor = None` tek başına tasarım kararı değil (bkz. eşleme tablosu ve M1) |
 | Global kısayollar | `RegisterHotKey` (Ctrl+Alt+H, Ctrl+Alt+X); Esc hook'tan |
@@ -18,7 +18,7 @@ Kaynak: macOS uygulaması (`Sources/TinyHand/`, Swift/AppKit). Hedef: özellik e
 | Kurulum / öz-güncelleme | Velopack (delta güncelleme dosyaları dahil) |
 | CI | `windows-latest` işi: `dotnet publish -r win-x64 --self-contained` + Velopack bundle; Windows varlıkları macOS işinin zaten oluşturduğu GitHub Release'e aynı yayın adımında eklenir |
 
-Elenen alternatifler: WPF overlay (`AllowsTransparency` + fullscreen topmost + 120 Hz yavaş), Rust (geliştirme hızı), WinUI/Tauri (interop yükü, kazanım yok).
+Elenen alternatifler: WPF overlay (`AllowsTransparency` + fullscreen topmost + 120 Hz yavaş), Rust (geliştirme hızı), WinUI/Tauri (interop yükü, kazanım yok), GDI+ → ULW/ULWI sunumu (M1'in derin ölçümleriyle elendi — present DWM redirection senkronunda değişken bloklanıyor; bkz. spike bölümü sonuç notu ve M1.5).
 
 ## M1 öncesi netleşecek karar: tıklama yönlendirme ve imleç görünürlüğü
 
@@ -42,7 +42,7 @@ Layered window'da alfa değeri 0 olan pikseller hit-test'i alttaki pencereye ge�
 | `CursorHider` (private CGS) | `WM_SETCURSOR` + boş imleç | Hook bir olayı yuttuğunda overlay o olayı pencere mesajı olarak almaz; layered window'un alfa 0 alanları hit-test'i alttaki pencereye geçirir. `Cursor = None` tek başına yeterli değil; imleç gizleme + click-through M1 prototipinde birlikte doğrulanır |
 | `OverlayController` (NSWindow) | Layered window, monitör başına | `Screen.AllScreens` |
 | `HotKeyCenter` (Carbon) | `RegisterHotKey` | |
-| `Ink` (CAShapeLayer) | GDI+ vektör çizim, fade animasyonu timer'ı | Gölge: önceden blur'lanmış sprite (GDI+ gerçek zamanlı blur yavaş) |
+| `Ink` (CAShapeLayer) | Direct2D vektör çizim (M1 prototipi GDI+), fade animasyonu timer'ı | Gölge: önceden blur'lanmış sprite (gerçek zamanlı blurdan kaçınılır) |
 | ⌘ basılı ok ucu | Ctrl (Windows tuşu Start menüsünü açar) | Açık uçlu: kullanıcı onayı |
 | Çift Shift click-through | LL keyboard hook, aynı mantık | İlk doğrulama M1 prototipinde |
 | `interactKey` basılıyken geçici click-through (macOS varsayılan ⌥) | Aynı mantık, ayarlanabilir tuş (önerilen varsayılan Alt) | `interactKeepsHand` ayarı: true ise el kalır, false (varsayılan) ise gerçek imleç görünür. Davranış M3, ayarı M4 |
@@ -81,6 +81,8 @@ Swift/AppKit ve C#/WinForms aynı depoda iki ayrı uygulamadır; kod paylaşım�
 3. Sonuç yetersizse Direct2D + `DirectComposition` kararı o zaman verilir — bu geçiş yüzey ve sunum yönetimini de etkilediğinden ayrı bir teknik karardır (tek render sınıfı sınırları içinde kalsa da).
 
 Ölçüm değerleri ve render kararı PROGRESS.md'de spike maddesinin yanına yazılır.
+
+**Spike sonucu ve karar (12 Kasım 2026):** İlk spike kararı "GDI+ kalır, kirli bölge ULWI" idi. M1 sırasında eklenen kare-süresi ölçümleri (HUD: periyot/draw/present halkaları, `--fpscheck`) bu kararı revize etti: ULW/ULWI present çağrıları bu makinede DWM redirection senkronunda **değişken 7–16 ms** bloklanıyor; kirli-bölge present ile gerçek el kadansı ~30 fps'e düşüyor (fps sayacı 60 gösterse de), tam-çerçeve present ile 60 fps'e sığınabiliyor ama periyot p95 21–27 ms'ye dağılıyor. Flip-model sunum (DXGI `Present`) DWM'e asenkron kuyruklanır ve bu bloklamayı ortadan kaldırır. Karar: **M2'ye geçmeden Direct2D + DirectComposition geçişi — M1.5 kilometre taşı.** Ölçüm kayıtları PROGRESS.md günlüğünde (12 Kasım fps turu).
 
 ## Proje yapısı
 
@@ -133,8 +135,17 @@ M1 görevleri:
 - [ ] Test matrisi: normal çizim, toolbar tıklaması, çift Shift ile alttaki uygulamaya tıklama (elin opak kısmı dahil), fare basılıyken mod değişimi (down/up aynı pencereye), Esc ile imleç dönüşü; farklı DPI'lı iki monitör arasında geçiş; ekran kilidi (Win+L) sonrası overlay/imleç/hook davranışı
 - **Çıkış kriteri (prototip başarı ölçütü):** TinyHand eli görünüyor; çizim tıklaması alta sızmıyor; çift Shift'te tıklama alttaki uygulamaya ulaşıyor; Esc gerçek imleci geri getiriyor. Ek doğrulamalar: Ctrl+Alt+H ile açılıp kapanıyor, hook kapatıp açınca yeniden kuruluyor, test matrisi (opak piksel, down/up, farklı DPI'lı monitör geçişi, ekran kilidi) geçiyor; spike ölçümleri ve render kararı PROGRESS.md'de kayıtlı.
 
+### M1.5 — Render yüzeyi geçişi (Direct2D + DirectComposition)
+Karar gereği M2'den önce uygulanır; gerekçe spike bölümündeki sonuç notu (ULW/ULWI present bloklaması ölçümleri). Girdi/imleç/hook katmanı ve kompozisyon döngüsü mimarisi değişmez; yalnız boyama ve sunum değişir (tek render sınıfı sınırları içinde).
+
+- [ ] Overlay pencere stili: `WS_EX_LAYERED` → `WS_EX_NOREDIRECTIONBITMAP`; D3D11 cihaz + DXGI flip-model swap chain + DirectComposition cihaz/target/visual iskeleti, monitör başına
+- [ ] El sprite, mürekkep, toolbar, HUD çizimlerinin Direct2D portu (M1 sahnesi görsel olarak birebir; DPI ölçekleme korunur)
+- [ ] İmleç gizleme ve click-through mekanizmaları aynen kalır: `WM_SETCURSOR` + boş imleç, `WS_EX_TRANSPARENT`; `WS_EX_NOREDIRECTIONBITMAP` pencerede alfa üzerinden hit-test geçişi olmadığından alfa=1 arka plan hilesine gerek kalmaz — E2E ve cursorcheck ile yeniden doğrulanır
+- [ ] Kompozisyon döngüsü (yenilemeye kilitli ticker) ve ölçüm altyapısı (HUD, fpscheck, halkalar) aynen taşınır
+- **Çıkış kriteri:** present kuyruğa bırakma <1 ms'de, bloklama yok; 60 Hz ekranda kare periyotu p95 ~17 ms civarı sabitleşir; `fpscheck` wiggle + sweep senaryolarında görsel takılma kaybolur; e2e-m1 10/10, cursorcheck 7/7, birim testleri geçer; ölçümler PROGRESS'e kaydedilir.
+
 ### M2 — Çizim
-- [ ] Sürükle → mürekkep çizimi (GDI+), renk/kalınluk ölçeği
+- [ ] Sürükle → mürekkep çizimi (Direct2D; M1.5 sonrası), renk/kalınluk ölçeği
 - [ ] Ctrl basılıyken ok ucu
 - [ ] Fade animasyonu (`Preferences.fadeSeconds` uyumlu)
 - [ ] Ctrl+Alt+X: mürekkebi temizle; Esc: temizle + kapat

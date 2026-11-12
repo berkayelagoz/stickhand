@@ -1,6 +1,6 @@
 # Windows Port — İlerleme
 
-Durum: **M1 kodu tamam; etkileşim senaryoları manuel doğrulamada.** Plan: [PLAN.md](./PLAN.md)
+Durum: **M1 tamam; sıradaki adım M1.5 — render yüzeyi geçişi (Direct2D + DirectComposition), M2'den önce.** Plan: [PLAN.md](./PLAN.md)
 Güncelleme kuralı: bir madde bitince `[x]` yapılır, tarih ve kısa not eklenir.
 
 ## M1 — İskelet ve spike
@@ -22,6 +22,7 @@ Güncelleme kuralı: bir madde bitince `[x]` yapılır, tarih ve kısa not eklen
   | Kirli bölge (`UpdateLayeredWindowIndirect`, ~800×1200 el bölgesi) | 67.9 fps | 14.6 ms¹ | **0.04 ms** | 14.6 / 17.1 ms | %6.3 |
   ¹ Kirli bölge render'ı spike'ta bile en büyük kalemdi çünkü el örnek boyutu (800×1200) uygulamanın gerçeğinden ~4 kat büyük çizildi; ULWI present maliyeti tam çerçeveye göre **~90 kat** düştü. Kayıtlar: `spike-stress.json`, `spike-realistic.json`, `spike-dirty.json` (hepsi bu makinede 6–8 sn ölçüm).
   **Render kararı:** 4K tam çerçeve GDI+ boyası 120 Hz bütçesini (8.3 ms) aşar (11.5–30 ms); kirli bölge ULWI yolu pratikte bedelsiz present sağlıyor. Karar: **GDI+ kalır**; M2/M3'te çizim yolu kirli bölge tabanlı olacak (el + mürekkep deltaları; tam boyama yalnız aktivasyon/monitör geçişinde), Direct2D/DirectComposition'a geçiş gerekmedi. Ekranda 60 Hz olduğu için 120 Hz busy kompozisyon hedefi bu makinede karşılanamaz — busy hız hedefi monitör yenilemesine bağlanacak (M3 fps yönetimi).
+  **Revize (12 Kasım 2026 — bkz. M1.5):** derin ölçümler (aşağıdaki akıcılık turları) ULW/ULWI present'in DWM redirection senkronunda 7–16 ms **değişken** bloklandığını gösterdi; kirli-bölge present'te gerçek el kadansı 30 fps'e düşüyordu. Karar: GDI+ yalnız M1 prototipinde kalır; M2'den önce Direct2D + DirectComposition geçişi (M1.5) yapılır.
 - [x] **Akıcılık: kompozisyon döngüsü 60 Hz ekranda gerçek 60 fps'e çekildi (12 Kasım 2026).** Kullanıcı raporu ("el 60 Hz gibi çalışmıyor") üzerine üç kök neden bulundu ve düzeltildi:
   1. **Ticker:** eski döngü render süresini kare dönemine *ekliyordu* (uyku = tam dönem; 4K'da ~43 fps). Yeni `WaitUntilNextTick` birikimli hedef (`target += interval`) — render süresi periodo gömülür, gecikme karesi yakalanır.
   2. **Busy hız hedefi:** sabit 120 Hz yerine `RebuildOverlays` içinde `Monitors.CurrentMode()` yenilemesi ölçülür, `busyFps = Clamp(hz, 60, 120)` → 60 Hz ekranda ~16.7 ms dönem (M3 fps maddesinin çekirdeği M1'e alınmış oldu).
@@ -48,8 +49,16 @@ Güncelleme kuralı: bir madde bitince `[x]` yapılır, tarih ve kısa not eklen
 - `SetCursorPos` LL hook'a olay üretmez; `mouse_event`/`SendInput` üretir (LLMHF_INJECTED) — ölçüm ve ilerideki SendInput işleri için önemli.
 - Güçlü kısayol kombinasyonu yok; Esc ve Ctrl+Alt+H her senaryodan çıkmayı garantiler.
 
+## M1.5 — Render yüzeyi geçişi (Direct2D + DirectComposition)
+Karar: M2'den önce uygulanır (gerekçe: M1 fps turlarının ölçümleri — ULW/ULWI present bloklaması). PLAN'daki M1.5 maddeleri:
+- [ ] Overlay pencere `WS_EX_LAYERED` → `WS_EX_NOREDIRECTIONBITMAP`; D3D11 + DXGI flip-model swap chain + DirectComposition target/visual (monitör başına)
+- [ ] El sprite, mürekkep, toolbar, HUD çizimlerinin Direct2D portu (M1 sahnesi görsel olarak birebir; DPI korunur)
+- [ ] İmleç gizleme (WM_SETCURSOR + boş imleç) ve click-through (`WS_EX_TRANSPARENT`) aynen; alfa=1 arka plan hilesi kalkar — E2E + cursorcheck yeniden doğrulanır
+- [ ] Kompozisyon döngüsü + ölçüm altyapısı (HUD, fpscheck, halkalar) aynen taşınır
+- **Çıkış kriteri:** present kuyruğa <1 ms, bloklama yok; kare periyotu p95 ~17 ms; e2e 10/10, cursorcheck 7/7, birim testleri; ölçümler buraya kaydedilir.
+
 ## M2 — Çizim
-- [ ] Mürekkep çizimi (GDI+, kirli bölge)
+- [ ] Mürekkep çizimi (Direct2D — M1.5 sonrası)
 - [ ] Ctrl basılıyken ok ucu *(Ctrl onayı bekliyor)*
 - [ ] Fade animasyonu
 - [ ] Ctrl+Alt+X / Esc kısayolları
@@ -78,7 +87,7 @@ Güncelleme kuralı: bir madde bitince `[x]` yapılır, tarih ve kısa not eklen
 - [ ] Ok ucu tuşu: Ctrl onayı
 - [x] Çift Shift'te imleç: macOS referansı — el görünür kalır, gerçek imleç gizli (M1 prototipinde Windows tarafında uygulandı: `SetSystemCursor` yolu)
 - [x] Hedef işletim sistemi: yalnızca Windows 11 x64; Windows 10 desteklenmez
-- [x] M1 spike render kararı: GDI+ + kirli bölge ULWI; Direct2D/DirectComposition gerekli değil (ölçümler yukarıda)
+- [x] M1 spike render kararı — **revize (12 Kasım 2026)**: GDI+/ULW yalnız M1 prototipinde; ULW/ULWI present'in DWM redirection senkronundaki değişken bloklaması ölçülünce (7–16 ms; kare periyotlarının bozulması, 30 fps görünür kadans) Direct2D + DirectComposition geçişi M2'den önce kararlaştırıldı → M1.5
 
 ## Günlük (bitince buraya ekleyin)
 | Tarih | Not |
@@ -89,3 +98,4 @@ Güncelleme kuralı: bir madde bitince `[x]` yapılır, tarih ve kısa not eklen
 | 12 Kasım 2026 | Akıcılık: el 60 Hz'e kilitlendi. Birikimli ticker (render süresi periodo gömülür), busy hedef `Clamp(yenileme, 60, 120)`, kirli bölge ULWI kompozisyonu; font/sprite önbellekleri, kare-içi bicubic kaldırıldı; `EnumDisplaySettings` CharSet düzeltildi (boş DEVMODE → 0 Hz görünüyordu). `--fpscheck` harness'i eklendi: 200 hamle/sn'de steady-state 62–64 fps, draw 2.42 / present 4.62 ms. Regresyonlar: 18/18 test, e2e 10/10, cursorcheck 7/7. |
 | 12 Kasım 2026 | İkinci akıcılık bulgusu: 62–64 fps ölçümüne rağmen gözle görülür ritim bozukluğu vardı — kare dönemi **tam ms'ye yuvarlanıyordu** (`1000/60 = 16 ms` = 62.5 fps; ekrana göre 0.67 ms/kare önde → her ~15 karede bir güncelleme boşa düşüp düzenli takılma olarak görünüyordu). Zamanlama milisaniyeden **Stopwatch tick'eau** taşındı (`TicksFromFps`, gerçek 16.667 ms dönem) → steady-state 59–61 fps, ekrana faz-kilitli. Regresyonlar: 18/18, e2e 10/10, cursorcheck 7/7. |
 | 12 Kasım 2026 | Üçüncü akıcılık bulgusu (HUD'un p95/max ölçümü sayesinde): kare sayacı 60 diyordu ama **gerçek kareler 30 fps'te işleniyordu**. Periyot/draw/present/wait halkaları çift deseni gösterdi (0.2 ms boş + 33 ms dolu kareler). Kök neden: kirli bölge `UpdateLayeredWindowIndirect` present'i bu makinede ~8–12 ms **DWM redirection senkronunda bloklanıyor** (spike ölçümündeki 0.04 ms'in aksine); wait 15.4 + draw ~2 + present 8–9 = ~26 ms > 16.7 → her gerçek kare bütçeyi aşıyor, araya telafi (present 0) karesi giriyordu. **Karar: kirli draw korunur, present tam çerçeve ULW** (bloklama süresi aynı ama her kare bütçe içinde bitiyor; `TH_PRESENT_FULL=0` ile A/B kalabilir). El frenleme azaldı; wiggle'da gerçek 60 fps, sweep px=400'te period p95 ~27 ms. Elenen: DwmFlush faz kilidi (free + flush, her iki present moduyla da daha kötü: fps 41–54). HUD çerçeve başına periyot/p95/max + draw/present gösterir; fpscheck'e `--px` (süpürme deseni), Sleep(1) çözünürlük ölçümü, periyot/present/wait satır dökümleri, FrameStats p95/max kırılımı eklendi. Kalıcı iz: ULW/ULWI present maliyeti ~7–16 ms — akıcılığın tavanı bu yol için; daha fazlası DirectComposition kararı (PLAN spike kararı gereği ölçümle gerekçelendirilebilir). Regresyonlar: 18/18, e2e 10/10, cursorcheck 7/7. |
+| 12 Kasım 2026 | **Karar: M1.5 — render yüzeyi geçişi (Direct2D + DirectComposition), M2'den önce.** Kullanıcı gözlemi ("spike testindeki stress sahnesi 30 fps'te bile akıcı, uygulama 60 fps'te akıcı değil") ölçümlerle örtüşüyor: akıcılığı belirleyen ortalamalar değil, kare aralığı düzeni; ULW sunumundaki değişken present bloklaması bu düzeni GDI+ yoluyla iyileştirilemeyecek biçimde bozuyor (DwmFlush faz kilidi de denendi, kötüleştirdi). PLAN revize edildi: teknoloji tablosu (NOREDIRECTIONBITMAP + DComp + flip-model), spike bölümü sonuç notu, M1.5 kilometre taşı ve M2 maddeleri (Direct2D). Referans uygulama: DeskGlass (desk reposu, D3D11 + DXGI flip + DirectComposition — aynı makinede bu tür kayıplar yok). |
