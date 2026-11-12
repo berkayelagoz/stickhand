@@ -9,12 +9,21 @@ using TinyHand.Overlay;
 namespace TinyHand;
 
 /// <summary>
-/// Owns the overlay lifetime: monitor-per-overlay layered windows on a dedicated
+/// Owns the overlay lifetime: monitor-per-overlay windows on a dedicated
 /// compositor thread, low-level hooks on their own pump, the click-through state
 /// machine and the cursor management strategy decided in the M1 plan:
 ///
 /// - Drawing mode: hook swallows button events; moves pass and hit the overlay
-///   (alpha=1 background) so WM_SETCURSOR blank-cur sors the real cursor.
+///   (WS_EX_NOREDIRECTIONBITMAP windows hit-test by their full rect) so
+///   WM_SETCURSOR blank-cur sors the real cursor.
+/// - Click-through mode (double Shift / toolbar): WS_EX_TRANSPARENT removes the
+///   overlay from hit-testing (also over opaque hand pixels); hook passes
+///   everything; the real cursor is hidden globally via SetSystemCursor with
+///   save/restore (contract: hand stays visible, real cursor stays hidden).
+/// - Down/up consistency: an up event is swallowed only if its down was swallowed.
+/// - Rendering (M1.5): Direct2D -> flip-model composition swap chain ->
+///   DirectComposition; the M1 GDI+/UpdateLayeredWindow path was retired because
+///   its present blocked 7-16 ms inside DWM redirection sync (PROGRESS.md).
 /// - Click-through mode (double Shift / toolbar): WS_EX_TRANSPARENT removes the
 ///   overlay from hit-testing (also over opaque hand pixels); hook passes
 ///   everything; the real cursor is hidden globally via SetSystemCursor with
@@ -39,11 +48,9 @@ public sealed class OverlayController : IDisposable
     {
         public required MonitorInfo Monitor { get; init; }
         public required OverlayWindow Window { get; init; }
-        public required LayeredSurface Surface { get; set; }
+        public required OverlaySurface Surface { get; init; }
+        public required HandScene.SceneResources Resources { get; set; }
         public bool IsPrimary => Monitor.IsPrimary;
-        // Dirty-region tracking (screen-space hand rect of the previous frame).
-        public Rectangle PrevHandLocal { get; set; } = Rectangle.Empty;
-        public bool HasPrevHand { get; set; }
     }
 
     // macOS OverlayController reference values. Busy target is capped by the primary
@@ -61,13 +68,11 @@ public sealed class OverlayController : IDisposable
     private long _busyIntervalTicks = TicksFromMs(1000.0 / 120);
     private long _nextTick;
 
-    // Dirty-region composition state. Set on events that change pixels anywhere
-    // (activate, mode toggle, monitor rebuild, stroke clear); motion-driven frames
-    // repaint only the hand/stroke/status regions and publish via ULWI.
-    private volatile bool _fullRefresh = true;
-    private string _lastRenderedStatus = "";
-    private Point _lastDrawnTail;
-    private int _lastDrawnStrokeCount;
+    // M1.5 present pacing: flip-model Present queues asynchronously, so the
+    // accumulated ticker remains the scheduling authority (SyncInterval 0).
+    // TH_PRESENT_VSYNC=1 switches to vsync-queued presents for measurements.
+    private static readonly uint PresentSyncInterval =
+        Environment.GetEnvironmentVariable("TH_PRESENT_VSYNC") == "1" ? 1u : 0u;
 
     // Live FPS HUD state: rolling ring of last frame periods (ticks) + the text
     // last painted, so the compositor can dirty just the HUD rect on change.
@@ -80,7 +85,6 @@ public sealed class OverlayController : IDisposable
     private int _framePeriodHead;
     private int _framePeriodCount;
     private long _lastFrameTs;
-    private string _lastRenderedHud = "";
     private string _fpsHud = "";
 
     /// <summary>Recent per-frame composition statistics (fpscheck + HUD source).</summary>
@@ -110,6 +114,7 @@ public sealed class OverlayController : IDisposable
 
     // ---- overlay-thread state ----
     private readonly HandScene _scene = new();
+    private OverlayRenderer? _renderer;
     private readonly GlobalCursorHider _cursorHider = new();
     private LowLevelHooks? _hooks;
     private readonly Stopwatch _clock = Stopwatch.StartNew();
@@ -165,17 +170,6 @@ public sealed class OverlayController : IDisposable
     // Overlay thread: message pump + composition loop
     // =====================================================================
 
-    // Measured decision (see PROGRESS.md, 12 Nov fps work): with dirty-region
-    // presents, UpdateLayeredWindowIndirect blocked 8-12 ms inside DWM redirection
-    // sync on the reference machine, causing every other frame to miss its
-    // deadline (visible hand cadence ~30 fps despite a 60 fps frame counter).
-    // A full UpdateLayeredWindow present costs the same wall time but every frame
-    // completes within budget, so the visible cadence is a true ~60 fps. Dirty
-    // draw is kept (clip limits paint work); only the present payload is whole.
-    // TH_PRESENT_FULL=0 restores dirty presents for future A/B measurements.
-    private static readonly bool PresentFull =
-        Environment.GetEnvironmentVariable("TH_PRESENT_FULL") != "0";
-
     private void OverlayLoop()
     {
         WinMM.timeBeginPeriod(1);
@@ -209,6 +203,9 @@ public sealed class OverlayController : IDisposable
         catch (Exception ex)
         {
             Debug.WriteLine($"Overlay loop crashed: {ex}");
+            // Harness modes (--fpscheck etc.) attach the parent console; surface the
+            // crash there too, otherwise a failed render stack shows up as plain zero fps.
+            try { Console.Error.WriteLine($"Overlay loop crashed: {ex}"); } catch { /* no console */ }
         }
         finally
         {
@@ -280,6 +277,7 @@ public sealed class OverlayController : IDisposable
 
     private void ApplyActivate()
     {
+        TraceLine("apply activate");
         if (_active) return;
         _clickThrough = false;
         _dragTracker.Reset();
@@ -302,16 +300,15 @@ public sealed class OverlayController : IDisposable
         _framePeriodCount = 0;
         _framePeriodHead = 0;
         _lastFrameTs = 0;
-        _lastRenderedHud = "";
 
         _active = true;
         _dirty = true;
-        _fullRefresh = true;
         ActiveChanged?.Invoke(true);
     }
 
     private void ApplyDeactivate()
     {
+        TraceLine("apply deactivate");
         if (!_active && _hooks is null) return;
         _active = false;
 
@@ -324,7 +321,6 @@ public sealed class OverlayController : IDisposable
 
         TryRestoreGlobalCursor();
         _clickThrough = false;
-        _fullRefresh = true;
 
         if (_overlays is { } overlays)
             foreach (var part in overlays)
@@ -354,16 +350,22 @@ public sealed class OverlayController : IDisposable
         {
             foreach (var part in overlays)
             {
+                part.Resources.Dispose();
                 part.Surface.Dispose();
                 part.Window.Dispose();
             }
             _overlays = null;
         }
+        _renderer?.Dispose();
+        _renderer = null;
     }
 
     private void RebuildOverlays()
     {
+        TraceLine("rebuild overlays");
         var old = _overlays;
+        _renderer ??= new OverlayRenderer();
+
         var monitors = Monitors.All();
         _primaryMonitor = monitors.FirstOrDefault(m => m.IsPrimary) ?? monitors.FirstOrDefault();
 
@@ -377,18 +379,34 @@ public sealed class OverlayController : IDisposable
         _busyIntervalTicks = TicksFromFps(busyFps);
 
         var parts = new List<OverlayPart>();
-        foreach (var monitor in monitors)
+        try
         {
-            OverlayWindow window = OverlayWindow.Create(monitor.Bounds);
-            window.CursorHidden += w => _active && !_clickThrough;
-            window.SystemMessage += (_, _) => _commands.Enqueue(new Command(CommandKind.RebuildMonitors));
-            window.Show();
-            parts.Add(new OverlayPart
+            foreach (var monitor in monitors)
             {
-                Monitor = monitor,
-                Window = window,
-                Surface = new LayeredSurface(monitor.Bounds.Width, monitor.Bounds.Height),
-            });
+                OverlayWindow window = OverlayWindow.Create(monitor.Bounds, layered: false);
+                window.CursorHidden += w => _active && !_clickThrough;
+                window.SystemMessage += (_, _) => _commands.Enqueue(new Command(CommandKind.RebuildMonitors));
+                window.Show();
+                var surface = _renderer.CreateSurface(window.Handle, monitor.Bounds.Width, monitor.Bounds.Height);
+                parts.Add(new OverlayPart
+                {
+                    Monitor = monitor,
+                    Window = window,
+                    Surface = surface,
+                    Resources = _scene.CreateResources(_renderer, surface.Context),
+                });
+            }
+        }
+        catch
+        {
+            // Partial rebuild failed: drop everything just created, keep the old set.
+            foreach (var part in parts)
+            {
+                part.Resources.Dispose();
+                part.Surface.Dispose();
+                part.Window.Dispose();
+            }
+            throw;
         }
 
         _overlays = parts;
@@ -400,13 +418,13 @@ public sealed class OverlayController : IDisposable
         {
             foreach (var part in old)
             {
+                part.Resources.Dispose();
                 part.Surface.Dispose();
                 part.Window.Dispose();
             }
         }
 
-        _dirty = true;
-        _fullRefresh = true; // fresh surfaces: repaint everything once
+        _dirty = true; // fresh frames: repaint once on the next tick
     }
 
     private void TryHideGlobalCursor()
@@ -434,88 +452,41 @@ public sealed class OverlayController : IDisposable
     // Composition
     // =====================================================================
 
-    private void RenderFrame(bool busy)
+private void RenderFrame(bool busy)
     {
         var overlays = _overlays;
         if (overlays is null || overlays.Count == 0) return;
 
-        var snapshot = BuildSnapshot();
-        Point cursor = snapshot.Cursor;
-
-        // Region-stage: full repaint (rare events) or union of changed areas.
-        bool full = _fullRefresh;
-        _fullRefresh = false;
-
-        Rectangle strokeDeltaScreen = Rectangle.Empty;
-        if (!full)
-            strokeDeltaScreen = StrokeDeltaScreenRect(snapshot.Strokes, penInflate: 14);
-
-        bool statusChanged = !ReferenceEquals(snapshot.Status, _lastRenderedStatus)
-                             && snapshot.Status != _lastRenderedStatus;
-        bool hudChanged = snapshot.FpsHud != _lastRenderedHud;
+        var snapshotBase = BuildSnapshot();
 
         long drawTicksAcc = 0, presentTicksAcc = 0;
         foreach (var part in overlays)
         {
             try
             {
-                int scale = Math.Max(1, (int)Math.Round(part.Monitor.DpiX / 96.0, MidpointRounding.AwayFromZero));
-                var bounds = part.Monitor.Bounds;
-                var newHandScreen = HandScene.HandRect(cursor, scale);
-                // The click-through label rides to the right of the hand.
-                if (snapshot.ClickThrough)
-                    newHandScreen.Width += 170 * scale;
-                var newHandLocal = Rectangle.Intersect(
-                    new Rectangle(newHandScreen.X - bounds.X, newHandScreen.Y - bounds.Y, newHandScreen.Width, newHandScreen.Height),
-                    new Rectangle(0, 0, bounds.Width, bounds.Height));
-
-                Rectangle? clip = null;
-                if (!full)
-                {
-                    var dirty = newHandLocal;
-                    if (part.HasPrevHand) dirty = Rectangle.Union(dirty, part.PrevHandLocal);
-                    if (!strokeDeltaScreen.IsEmpty)
-                    {
-                        var strokeLocal = Rectangle.Intersect(
-                            new Rectangle(strokeDeltaScreen.X - bounds.X, strokeDeltaScreen.Y - bounds.Y,
-                                          strokeDeltaScreen.Width, strokeDeltaScreen.Height),
-                            new Rectangle(0, 0, bounds.Width, bounds.Height));
-                        dirty = Rectangle.Union(dirty, strokeLocal);
-                    }
-                    if (statusChanged && part.IsPrimary)
-                    {
-                        var strip = new Rectangle(0, bounds.Height - 130 * scale, bounds.Width, 130 * scale);
-                        dirty = Rectangle.Union(dirty, strip);
-                    }
-                    if (hudChanged && part.IsPrimary)
-                    {
-                        var hud = HandScene.HudRect(part.Monitor, scale);
-                        dirty = Rectangle.Union(dirty, hud);
-                    }
-                    dirty.Intersect(new Rectangle(0, 0, bounds.Width, bounds.Height));
-                    if (dirty.Width > 0 && dirty.Height > 0) clip = dirty;
-                    else continue; // nothing changed on this monitor this frame
-                }
+                // Toolbar/status/HUD ride the primary monitor only (the M1 dirty
+                // clip was implicitly limiting them to it; explicit now that
+                // every frame is a full redraw).
+                var snapshot = snapshotBase with { IsPrimary = part.Monitor.IsPrimary };
+                var surface = part.Surface;
 
                 long d0 = Stopwatch.GetTimestamp();
-                _scene.Draw(part.Surface.Graphics, part.Monitor, snapshot, clip);
+                surface.BeginDraw();
+                _scene.Draw(surface.Context, part.Resources, part.Monitor, in snapshot);
+                bool drew = surface.EndDraw();
                 long d1 = Stopwatch.GetTimestamp();
-                bool presented = PresentFull || clip is null
-                    ? part.Surface.PresentToRedirected(part.Window.Handle)
-                    : part.Surface.PresentDirtyToRedirected(part.Window.Handle, clip.Value);
+                bool presented = drew && surface.Present(PresentSyncInterval);
                 long d2 = Stopwatch.GetTimestamp();
+
                 drawTicksAcc += d1 - d0;
                 presentTicksAcc += d2 - d1;
                 if (!presented)
-                    _fullRefresh = true; // lost content: repaint fully next frame
-
-                part.PrevHandLocal = newHandLocal;
-                part.HasPrevHand = true;
+                    _commands.Enqueue(new Command(CommandKind.RebuildMonitors)); // device loss: rebuild the stack
             }
             catch (Exception ex)
             {
                 Debug.WriteLine($"Render failed on {part.Monitor.Bounds}: {ex.Message}");
-                _fullRefresh = true;
+                _commands.Enqueue(new Command(CommandKind.RebuildMonitors));
             }
         }
         Interlocked.Add(ref _drawTicks, drawTicksAcc);
@@ -537,8 +508,8 @@ public sealed class OverlayController : IDisposable
         _lastFrameTs = ts;
 
         // Real-cursor suppression in drawing mode is handled in WM_SETCURSOR
-        // (the alpha=1 background keeps the overlay in the hit-test for every
-        // delivered move, so the blank cursor is refreshed on input activity).
+        // (the NOREDIRECTIONBITMAP overlay is hit-tested over its whole rect, so
+        // the blank cursor is refreshed on input activity).
 
         _fpsFrames++;
         long now = _clock.ElapsedMilliseconds;
@@ -554,8 +525,8 @@ public sealed class OverlayController : IDisposable
             var mouseStats = _hooks?.MouseStats.TakeSnapshot();
             var kbdStats = _hooks?.KeyboardStats.TakeSnapshot();
             _status = busy
-                ? $"TinyHand M1 | mode {(_clickThrough ? "click-through" : "draw")} | {_fps} fps | mouse cb p95 {mouseStats?.P95Ms ?? 0:0.000} ms | kbd cb p95 {kbdStats?.P95Ms ?? 0:0.000} ms | strokes {snapshot.Strokes.Count} | Ctrl+Alt+H toggle | Esc close | Ctrl+Alt+Q exit app"
-                : $"TinyHand M1 | mode {(_clickThrough ? "click-through" : "draw")} | {_fps} fps | Ctrl+Alt+H toggle | Esc close | Ctrl+Alt+Q exit app";
+                ? $"TinyHand M1.5 | mode {(_clickThrough ? "click-through" : "draw")} | {_fps} fps | mouse cb p95 {mouseStats?.P95Ms ?? 0:0.000} ms | kbd cb p95 {kbdStats?.P95Ms ?? 0:0.000} ms | strokes {snapshotBase.Strokes.Count} | Ctrl+Alt+H toggle | Esc close | Ctrl+Alt+Q exit app"
+                : $"TinyHand M1.5 | mode {(_clickThrough ? "click-through" : "draw")} | {_fps} fps | Ctrl+Alt+H toggle | Esc close | Ctrl+Alt+Q exit app";
             _statusRefreshAt = now + 250;
 
             var stats = FrameStatsSnapshot();
@@ -563,8 +534,6 @@ public sealed class OverlayController : IDisposable
                 ? $"{_fps} fps | p95 {stats.PeriodP95Ms:0.0} / max {stats.PeriodMaxMs:0.0} ms | draw {DrawAvgMs:0.0} / present {PresentAvgMs:0.0}"
                 : $"{_fps} fps idle | p95 {stats.PeriodP95Ms:0.0} / max {stats.PeriodMaxMs:0.0} ms";
         }
-        _lastRenderedStatus = snapshot.Status;
-        _lastRenderedHud = snapshot.FpsHud;
     }
 
     /// <summary>p95/max of period, draw and present over the recent frame ring. Public for fpscheck.</summary>
@@ -615,49 +584,6 @@ public sealed class OverlayController : IDisposable
         return arr;
     }
 
-    /// <summary>
-    /// Bounding box (screen coords) of ink drawn since the previous frame: a new
-    /// stroke's first point, or the last segment of the active stroke. Updates the
-    /// trackers; returns Rectangle.Empty when nothing moved.
-    /// </summary>
-    private Rectangle StrokeDeltaScreenRect(List<List<Point>> strokes, int penInflate)
-    {
-        var delta = Rectangle.Empty;
-        var expanded = (Point p) => new Rectangle(p.X - penInflate, p.Y - penInflate, penInflate * 2, penInflate * 2);
-
-        if (strokes.Count == 0)
-        {
-            _lastDrawnStrokeCount = 0;
-            return delta;
-        }
-
-        var active = strokes[^1];
-        if (active.Count == 0)
-        {
-            _lastDrawnStrokeCount = strokes.Count;
-            return delta;
-        }
-
-        if (strokes.Count > _lastDrawnStrokeCount)
-        {
-            delta = expanded(active[0]); // brand-new stroke: its first dot is fresh ink
-        }
-        else
-        {
-            var tail = active[^1];
-            var seg = new Rectangle(
-                Math.Min(tail.X, _lastDrawnTail.X) - penInflate,
-                Math.Min(tail.Y, _lastDrawnTail.Y) - penInflate,
-                Math.Abs(tail.X - _lastDrawnTail.X) + penInflate * 2,
-                Math.Abs(tail.Y - _lastDrawnTail.Y) + penInflate * 2);
-            delta = seg;
-        }
-
-        _lastDrawnTail = active[^1];
-        _lastDrawnStrokeCount = strokes.Count;
-        return delta;
-    }
-
     private SceneSnapshot BuildSnapshot()
     {
         List<List<Point>> strokes;
@@ -690,6 +616,7 @@ public sealed class OverlayController : IDisposable
 
         if (!_active) return false;
 
+        TraceIfWorthwhile(e);
         switch (Classify(e.Message))
         {
             case MouseEventKind.Move:
@@ -725,6 +652,14 @@ public sealed class OverlayController : IDisposable
             default:
                 return false;
         }
+    }
+
+    private void TraceIfWorthwhile(HookMouseEvent e)
+    {
+        if (!TraceEnabled) return;
+        var kind = Classify(e.Message);
+        if (kind is MouseEventKind.Down or MouseEventKind.Up)
+            TraceLine($"mouse {kind} at ({e.X},{e.Y}) ctx={_clickThrough} draw={_drawing} toolbar={TryGetToolbarButton(e.X, e.Y, out var button)}{(button is null ? "" : $" id={button.Id}")}");
     }
 
     private MouseEventKind Classify(uint message) => message switch
@@ -776,6 +711,7 @@ public sealed class OverlayController : IDisposable
     private void ToggleClickThrough()
     {
         bool newMode = !_clickThrough;
+        TraceLine($"toggle click-through -> {newMode}");
         _clickThrough = newMode;
 
         // Flip WS_EX_TRANSPARENT immediately from the hook thread (SetWindowLong on
@@ -787,7 +723,6 @@ public sealed class OverlayController : IDisposable
 
         _commands.Enqueue(new Command(newMode ? CommandKind.HideGlobalCursor : CommandKind.RestoreGlobalCursor));
         _dirty = true;
-        _fullRefresh = true; // toolbar labels, click-through chip and status all change
     }
 
     private bool OnKeyboardFilter(HookKeyEvent e)
@@ -804,6 +739,7 @@ public sealed class OverlayController : IDisposable
 
         if (e.IsOwnInjected) return false;
 
+        TraceLine($"vk=0x{e.Vk:X2} down own={e.IsOwnInjected}");
         if (_doubleShift.RegisterKeyDown(e.Vk))
             ToggleClickThrough();
 
@@ -837,8 +773,24 @@ public sealed class OverlayController : IDisposable
         lock (_strokeLock) _strokes = new List<List<Point>>(8);
         _drawing = false;
         _dirty = true;
-        _fullRefresh = true;
     }
 
     private void MarkActivity() => Interlocked.Exchange(ref _lastActivityMs, _clock.ElapsedMilliseconds);
+
+    // TH_TRACE=1: hook decisions + lifecycle events appended to tinyhand-trace.log
+    // next to the executable (works for GUI mode, where there is no console).
+    private static readonly bool TraceEnabled = Environment.GetEnvironmentVariable("TH_TRACE") == "1";
+    private static void TraceLine(string message)
+    {
+        if (!TraceEnabled) return;
+        try
+        {
+            string path = Path.Combine(AppContext.BaseDirectory, "tinyhand-trace.log");
+            File.AppendAllText(path, $"{DateTime.Now:HH:mm:ss.fff} {message}{Environment.NewLine}");
+        }
+        catch (Exception ex)
+        {
+            Debug.WriteLine($"trace write failed: {ex.Message}");
+        }
+    }
 }

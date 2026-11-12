@@ -50,6 +50,7 @@ public static class Win32
     public const int GWL_EXSTYLE = -20;
     public const uint WS_POPUP = 0x80000000;
     public const uint WS_EX_LAYERED = 0x00080000;
+    public const uint WS_EX_NOREDIRECTIONBITMAP = 0x02000000;
     public const uint WS_EX_TRANSPARENT = 0x00000020;
     public const uint WS_EX_NOACTIVATE = 0x08000000;
     public const uint WS_EX_TOPMOST = 0x00000008;
@@ -62,6 +63,8 @@ public static class Win32
 
     // --- Messages ---
     public const uint WM_SETCURSOR = 0x0020;
+    public const uint WM_NCHITTEST = 0x0084;
+    public static readonly IntPtr HTTRANSPARENT = new(-1);
     public const uint WM_DESTROY = 0x0002;
     public const uint WM_DPICHANGED = 0x02E0;
     public const uint WM_DISPLAYCHANGE = 0x007E;

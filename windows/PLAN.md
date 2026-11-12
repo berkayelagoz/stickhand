@@ -138,11 +138,11 @@ M1 görevleri:
 ### M1.5 — Render yüzeyi geçişi (Direct2D + DirectComposition)
 Karar gereği M2'den önce uygulanır; gerekçe spike bölümündeki sonuç notu (ULW/ULWI present bloklaması ölçümleri). Girdi/imleç/hook katmanı ve kompozisyon döngüsü mimarisi değişmez; yalnız boyama ve sunum değişir (tek render sınıfı sınırları içinde).
 
-- [ ] Overlay pencere stili: `WS_EX_LAYERED` → `WS_EX_NOREDIRECTIONBITMAP`; D3D11 cihaz + DXGI flip-model swap chain + DirectComposition cihaz/target/visual iskeleti, monitör başına
-- [ ] El sprite, mürekkep, toolbar, HUD çizimlerinin Direct2D portu (M1 sahnesi görsel olarak birebir; DPI ölçekleme korunur)
-- [ ] İmleç gizleme ve click-through mekanizmaları aynen kalır: `WM_SETCURSOR` + boş imleç, `WS_EX_TRANSPARENT`; `WS_EX_NOREDIRECTIONBITMAP` pencerede alfa üzerinden hit-test geçişi olmadığından alfa=1 arka plan hilesine gerek kalmaz — E2E ve cursorcheck ile yeniden doğrulanır
-- [ ] Kompozisyon döngüsü (yenilemeye kilitli ticker) ve ölçüm altyapısı (HUD, fpscheck, halkalar) aynen taşınır
-- **Çıkış kriteri:** present kuyruğa bırakma <1 ms'de, bloklama yok; 60 Hz ekranda kare periyotu p95 ~17 ms civarı sabitleşir; `fpscheck` wiggle + sweep senaryolarında görsel takılma kaybolur; e2e-m1 10/10, cursorcheck 7/7, birim testleri geçer; ölçümler PROGRESS'e kaydedilir.
+- [x] Overlay pencere stili: `WS_EX_LAYERED` → `WS_EX_NOREDIRECTIONBITMAP`; D3D11 cihaz + DXGI flip-model swap chain + DirectComposition cihaz/target/visual iskeleti, monitör başına (13 Kasım 2026)
+- [x] El sprite, mürekkep, toolbar, HUD çizimlerinin Direct2D portu (M1 sahnesi görsel olarak birebir; DPI ölçekleme korunur) (13 Kasım 2026)
+- [x] İmleç gizleme ve click-through mekanizmaları aynen kalır: `WM_SETCURSOR` + boş imleç; click-through stili gerçeklemede `WS_EX_TRANSPARENT` **tek başına** `WS_EX_NOREDIRECTIONBITMAP` pencerede hit-test'i geçirmiyor (M1.5 e2e turunda ölçüldü) — `WS_EX_TRANSPARENT | WS_EX_LAYERED` çiftiyle (DComp görselini bozmaz, pixel probe ile doğrulandı) + `WM_NCHITTEST → HTTRANSPARENT` aynı-iş parçacığı yedekleme yoluyla gerçeklendi; `WS_EX_LAYERED` yalnız click-through bölümlerinde eklenir. E2E ve cursorcheck ile yeniden doğrulandı *(13 Kasım 2026)*
+- [x] Kompozisyon döngüsü (yenilemeye kilitli ticker) ve ölçüm altyapısı (HUD, fpscheck, halkalar) aynen taşınır (13 Kasım 2026; kirli-bölge ULW kodu kalktı — flip modelde kalıcı yüzey yok, her kare tam çerçeve)
+- **Çıkış kriteri (karşılandı, 13 Kasım 2026):** present kuyruğa bırakma <1 ms'de, bloklama yok; 60 Hz ekranda kare periyotu p95 ~17 ms civarı sabitleşir; `fpscheck` wiggle + sweep senaryolarında görsel takılma kaybolur; e2e-m1 10/10, cursorcheck 7/7, birim testleri geçer; ölçümler PROGRESS'e kaydedilir.
 
 ### M2 — Çizim
 - [ ] Sürükle → mürekkep çizimi (Direct2D; M1.5 sonrası), renk/kalınluk ölçeği
