@@ -19,6 +19,9 @@ internal static class Program
         if (args.Contains("--hookcheck"))
             return HookCheck.Run(Rest(args));
 
+        if (args.Contains("--fpscheck"))
+            return FpsCheck.Run(Rest(args));
+
         // .NET WinForms bootstrap (source-generated; HighDpiMode comes from
         // ApplicationHighDpiMode in the csproj, the manifest pins PerMonitorV2).
         ApplicationConfiguration.Initialize();

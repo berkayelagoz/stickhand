@@ -402,7 +402,7 @@ public static class User32
     [return: MarshalAs(UnmanagedType.Bool)]
     public static extern bool DestroyCursor(IntPtr hCursor);
 
-    [DllImport("user32.dll", SetLastError = true)]
+    [DllImport("user32.dll", SetLastError = true, CharSet = CharSet.Unicode)]
     [return: MarshalAs(UnmanagedType.Bool)]
     public static extern bool EnumDisplaySettings(string? lpszDeviceName, uint iModeNum, ref DEVMODE lpDevMode);
 
@@ -412,6 +412,10 @@ public static class User32
     [DllImport("user32.dll", SetLastError = true)]
     [return: MarshalAs(UnmanagedType.Bool)]
     public static extern bool SystemParametersInfo(uint uiAction, uint uiParam, IntPtr pvParam, uint fuWinIni);
+
+    /// <summary>Legacy input injection (superseded by SendInput; used only by the fps test harness).</summary>
+    [DllImport("user32.dll")]
+    public static extern void mouse_event(uint dwFlags, int dx, int dy, uint dwData, UIntPtr dwExtraInfo);
 }
 
 public static class Gdi32

@@ -24,12 +24,64 @@ public sealed record SceneSnapshot(
 /// </summary>
 public sealed class HandScene
 {
+    /// <summary>Diagnostics only (fpscheck --opaque): present an opaque background to
+    /// compare UpdateLayeredWindow cost against the near-transparent alpha=1 fill.</summary>
+    public static bool OpaqueBackground;
+
     // Hand asset is 1024x1536 (portrait, fingertip up). M1 anchors the fingertip at the
     // cursor; per-style tip/tipX factors from macOS PointerStyle are ported in M4.
     private const int HandHeightPx = 200;
     private const float TipAnchorX = 0.5f;
 
     private static readonly Lazy<Bitmap> Hand = new(LoadHand);
+
+    private static readonly Dictionary<int, Bitmap> ScaledHandCache = new();
+    private static readonly Dictionary<int, Font> ToolbarFontCache = new();
+    private static readonly Dictionary<int, Font> LabelFontCache = new();
+    private static readonly Dictionary<int, Font> StatusFontCache = new();
+
+    private static Bitmap ScaledHand(int scale)
+    {
+        lock (ScaledHandCache)
+        {
+            if (!ScaledHandCache.TryGetValue(scale, out var scaled))
+            {
+                int h = HandHeightPx * scale;
+                int w = (int)Math.Round(h * (Hand.Value.Width / (float)Hand.Value.Height));
+                scaled = new Bitmap(w, h, System.Drawing.Imaging.PixelFormat.Format32bppPArgb);
+                using var g = Graphics.FromImage(scaled);
+                g.InterpolationMode = System.Drawing.Drawing2D.InterpolationMode.HighQualityBicubic;
+                g.PixelOffsetMode = System.Drawing.Drawing2D.PixelOffsetMode.Half;
+                g.DrawImage(Hand.Value, 0, 0, w, h);
+                ScaledHandCache[scale] = scaled;
+            }
+            return scaled;
+        }
+    }
+
+    private static Font ToolbarFont(int scale)
+    {
+        lock (ToolbarFontCache)
+            return ToolbarFontCache.TryGetValue(scale, out var f)
+                ? f
+                : ToolbarFontCache[scale] = new Font("Segoe UI", 15f * scale, FontStyle.Bold);
+    }
+
+    private static Font LabelFont(int scale)
+    {
+        lock (LabelFontCache)
+            return LabelFontCache.TryGetValue(scale, out var f)
+                ? f
+                : LabelFontCache[scale] = new Font("Segoe UI", 11f * scale, FontStyle.Bold);
+    }
+
+    private static Font StatusFont(int scale)
+    {
+        lock (StatusFontCache)
+            return StatusFontCache.TryGetValue(scale, out var f)
+                ? f
+                : StatusFontCache[scale] = new Font("Consolas", 12f);
+    }
 
     private static Bitmap LoadHand()
     {
@@ -39,9 +91,32 @@ public sealed class HandScene
         return new Bitmap(stream);
     }
 
+    /// <summary>Screen-space destination rect of the hand sprite for the given cursor and scale.</summary>
+    public static Rectangle HandRect(Point cursor, int scale)
+    {
+        int h = HandHeightPx * scale;
+        float w = h * (Hand.Value.Width / (float)Hand.Value.Height);
+        float x = cursor.X - w * TipAnchorX;
+        float y = cursor.Y - 8 * scale;
+        // +1 px to cover bicubic edge bleed.
+        return Rectangle.Round(new RectangleF(x - 1, y - 1, w + 2, h + 2));
+    }
+
     public void Draw(Graphics g, MonitorInfo monitor, in SceneSnapshot scene)
     {
-        g.Clear(Color.FromArgb(1, 0, 0, 0));
+        Draw(g, monitor, scene, null);
+    }
+
+    /// <summary>
+    /// Draw with an optional clip rect (monitor-local). Dirty-region frames clip to
+    /// the changed area; Graphics.Clear respects the clip, so untouched pixels keep
+    /// their previous frame content on the persistent surface.
+    /// </summary>
+    public void Draw(Graphics g, MonitorInfo monitor, in SceneSnapshot scene, Rectangle? clip)
+    {
+        if (clip is { } clipRect) g.SetClip(clipRect);
+
+        g.Clear(OpaqueBackground ? Color.FromArgb(255, 0, 0, 0) : Color.FromArgb(1, 0, 0, 0));
 
         int scale = Math.Max(1, (int)Math.Round(monitor.DpiX / 96.0, MidpointRounding.AwayFromZero));
 
@@ -56,6 +131,8 @@ public sealed class HandScene
             DrawToolbar(g, scene.Toolbar, scale);
             DrawStatus(g, monitor, scene.Status, scale);
         }
+
+        if (clip.HasValue) g.ResetClip();
     }
 
     private static void DrawStrokes(Graphics g, List<List<Point>> strokes, int scale)
@@ -76,20 +153,22 @@ public sealed class HandScene
 
     private static void DrawHand(Graphics g, in SceneSnapshot scene, int scale)
     {
-        int h = HandHeightPx * scale;
-        float w = h * (Hand.Value.Width / (float)Hand.Value.Height);
+        var hand = ScaledHand(scale);
+        int h = hand.Height;
+        float w = hand.Width;
         float x = scene.Cursor.X - w * TipAnchorX;
         float y = scene.Cursor.Y - 8 * scale; // fingertip sits at the cursor point
 
-        g.InterpolationMode = System.Drawing.Drawing2D.InterpolationMode.HighQualityBicubic;
-        g.PixelOffsetMode = System.Drawing.Drawing2D.PixelOffsetMode.HighQuality;
-        g.DrawImage(Hand.Value, x, y, w, h);
+        // Same-size PARGB blit from the cached prescaled sprite (bicubic ran once
+        // per scale at cache build time, not every frame).
+        g.InterpolationMode = System.Drawing.Drawing2D.InterpolationMode.NearestNeighbor;
+        g.PixelOffsetMode = System.Drawing.Drawing2D.PixelOffsetMode.Half;
+        g.DrawImage(hand, x, y, w, h);
 
         if (scene.ClickThrough)
         {
-            using var font = new Font("Segoe UI", 11f * scale, FontStyle.Bold);
             using var brush = new SolidBrush(Color.FromArgb(255, 244, 51, 90));
-            g.DrawString("click-through", font, brush, x + w + 6 * scale, y + 4 * scale);
+            g.DrawString("click-through", LabelFont(scale), brush, x + w + 6 * scale, y + 4 * scale);
         }
     }
 
@@ -98,7 +177,7 @@ public sealed class HandScene
         using var bg = new SolidBrush(Color.FromArgb(245, 28, 28, 32));
         using var border = new Pen(Color.FromArgb(255, 255, 255, 255), 2f * Math.Max(1, scale));
         using var textBrush = new SolidBrush(Color.FromArgb(255, 255, 255, 255));
-        using var font = new Font("Segoe UI", 15f * scale, FontStyle.Bold);
+        var font = ToolbarFont(scale);
         var format = new StringFormat
         {
             Alignment = StringAlignment.Center,
@@ -117,10 +196,9 @@ public sealed class HandScene
     private static void DrawStatus(Graphics g, MonitorInfo monitor, string status, int scale)
     {
         if (string.IsNullOrEmpty(status)) return;
-        using var font = new Font("Consolas", 12f);
-        using var brush = new SolidBrush(Color.FromArgb(200, 40, 40, 46)); // semi-transparent, still hits alpha != 0 budget? keep low alpha
+        using var brush = new SolidBrush(Color.FromArgb(200, 40, 40, 46));
         float x = 14 * scale;
         float y = monitor.Bounds.Height - 28 * scale;
-        g.DrawString(status, font, brush, x, y);
+        g.DrawString(status, StatusFont(scale), brush, x, y);
     }
 }
