@@ -43,7 +43,7 @@ public sealed class HandScene
     {
         g.Clear(Color.FromArgb(1, 0, 0, 0));
 
-        int scale = Math.Max(1, (int)(monitor.DpiX / 96));
+        int scale = Math.Max(1, (int)Math.Round(monitor.DpiX / 96.0, MidpointRounding.AwayFromZero));
 
         // Screen-coordinate space translated into this monitor's local space.
         g.TranslateTransform(-monitor.Bounds.X, -monitor.Bounds.Y);

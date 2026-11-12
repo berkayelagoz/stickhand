@@ -486,7 +486,9 @@ public sealed class OverlayController : IDisposable
                 ToggleClickThrough();
                 break;
             case "exit":
-                _commands.Enqueue(new Command(CommandKind.Deactivate));
+                // Single path through SetActive keeps ActiveRequested (hotkey/menu mirror)
+                // in sync with the real overlay state.
+                SetActive(false);
                 break;
         }
     }
@@ -515,7 +517,7 @@ public sealed class OverlayController : IDisposable
         if (e.Vk == VkEscape)
         {
             ClearStrokes();
-            _commands.Enqueue(new Command(CommandKind.Deactivate));
+            SetActive(false); // keep ActiveRequested in sync (see RunToolbarCommand)
             return true; // swallowed: the app below must not see TinyHand's Esc
         }
 

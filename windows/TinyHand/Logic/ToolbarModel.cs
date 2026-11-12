@@ -18,7 +18,7 @@ public static class ToolbarModel
 
     public static string ToggleLabel(bool clickThrough) => clickThrough ? "Click-through: ON" : "Click-through: OFF";
 
-    public static int Scale(int dpi) => Math.Max(1, dpi / 96);
+    public static int Scale(int dpi) => Math.Max(1, (int)Math.Round(dpi / 96.0, MidpointRounding.AwayFromZero));
 
     public static List<ToolbarButton> Build(int monitorWidth, int dpi, bool clickThrough)
     {

@@ -23,14 +23,15 @@ Güncelleme kuralı: bir madde bitince `[x]` yapılır, tarih ve kısa not eklen
   ¹ Kirli bölge render'ı spike'ta bile en büyük kalemdi çünkü el örnek boyutu (800×1200) uygulamanın gerçeğinden ~4 kat büyük çizildi; ULWI present maliyeti tam çerçeveye göre **~90 kat** düştü. Kayıtlar: `spike-stress.json`, `spike-realistic.json`, `spike-dirty.json` (hepsi bu makinede 6–8 sn ölçüm).
   **Render kararı:** 4K tam çerçeve GDI+ boyası 120 Hz bütçesini (8.3 ms) aşar (11.5–30 ms); kirli bölge ULWI yolu pratikte bedelsiz present sağlıyor. Karar: **GDI+ kalır**; M2/M3'te çizim yolu kirli bölge tabanlı olacak (el + mürekkep deltaları; tam boyama yalnız aktivasyon/monitör geçişinde), Direct2D/DirectComposition'a geçiş gerekmedi. Ekranda 60 Hz olduğu için 120 Hz busy kompozisyon hedefi bu makinede karşılanamaz — busy hız hedefi monitör yenilemesine bağlanacak (M3 fps yönetimi).
 - [x] Tray simgesi + aç/kapa menüsü **(kod tamam; manuel)** (12 Kasım 2026): `NotifyIcon` + menü (Aktif/Ctrl+Alt+H, Çıkış), Ctrl+Alt+H `RegisterHotKey` (MOD_NOREPEAT). Prototip otomatik etkin başlar (test kolaylığı).
-- [ ] Test matrisi (etkileşimli, elle doğrulanacak — `TinyHand.exe` çalıştırıp tabloyu izleyin):
-  1. Normal çizim: sürükle → pembe mürekkep konturu; alttaki uygulama tıklama **almaz** (örn. Not Defteri'nde seçim olmaz); gerçek imleç görünmez.
-  2. Toolbar tıklaması: üst şerit "Click-through" ve "Exit" düğmeleri tıklanınca komut çalışır, alttaki uygulama almaz.
-  3. Çift Shift: tıklama alttaki uygulamaya **elin opak piksellerinin üzerinde de** gider; el görünür, gerçek imleç gizli kalır; tekrar çift Shift → çizim modu.
-  4. Fare basılıyken mod değişimi: down çizim modunda, up öncesi çift Shift → up yutulur (alttaki uygulama down'sız up görmez); tersi de simetrik.
-  5. Esc: kontur temizlenir, overlay kapanır, gerçek imleç döner; Ctrl+Alt+H ile aç/kapa iki kez çalışır (hook yeniden kurulur — `--hookcheck` API düzeyinde kanıtladı).
-  6. Different DPI'lı iki monitör geçişi; ekran kilidi (Win+L) sonrası overlay/imleç/hook. (Bu makinede tek monitör var; çift DPI matrisi uygun donanımda beklemede.)
-- **Çıkış kriteri durumu:** kod eksiksiz; 1–5 senaryoları bu makinede elle doğrulanmalı, 6 ayrı donanım ister. El/çizim/tıklama/imleç akışlarının hepsi prototipte uygulanmış durumda.
+- [x] Test matrisi — maddeler 1–5 `scripts/e2e-m1.ps1` ile **otomatik doğrulandı (10/10 PASS, 12 Kasım 2026)**. Harness gerçek girdi enjeksiyonu (~mouse_event/keybd_event) yapar, altta bir "logger" penceresi tıklama alıp almadığını sayar; `e2e-m1-result.txt` kaydı:
+  1. Normal çizim: sürükleme tıklaması alta sızmıyor **(PASS, 0 olay)**
+  2. Toolbar tıklaması: "Click-through" ve "Exit" hook içinden yönlendi **(PASS)**
+  3. Çift Shift: tıklama alttaki uygulamaya, elin opak pikselleri üzerinden de gidiyor; el görünür, gerçek imleç gizli **(PASS)**
+  4. Fare basılıyken mod değişimi: down/up her iki yönde aynı hedefe **(PASS — yutmalı ve geçişli senaryolar ayrı ayrı)**
+  5. Esc → imleç hareket ettirilince geri döner; Ctrl+Alt+H aç/kapa döngüleri hook yeniden kurulumunu kanıtladı **(PASS)**. E2E sırasında bulunan ve düzeltilen hata: Esc/toolbar-exit `ActiveRequested` senkron durumunu güncellemiyordu → Ctrl+Alt+H ilk basışta yanlış yöne çeviriyordu; tüm deaktivasyon tek yol `SetActive(false)` üzerinden geçiyor.
+  - **Görsel/elle kalansılar:** gerçek imlecin piksel düzeyde gizlendiği/döndüğü (görsel kontrol), 6. madde: farklı DPI'lı iki monitör geçişi ve ekran kilidi (Win+L) — uygun donanım gerektirir, beklemede.
+  - **Bilinen sınırlar (M1 notları):** tek-instance koruması M4'te; birden çok TinyHand çalıştırılırsa hook'lar üst üste biner (Elle test sırasında iki instance açık kalmış — o bahattır). Anormal ölümde imleç seti boş kalırsa: `SystemParametersInfo(SPI_SETCURSORS)` (harness da temizlikte çağırır).
+- **Çıkış kriteri durumu:** 1–5 senaryoları otomatik E2E ile geçti (10/10); kalan: imleç gizlemenin görsel onayı, çift-DPI ve Win+L maddeleri (donanım/görsel kontrol gerektirir).
 
 ### M1 sonuç notları (protipten çıkan teknik bulgular, üst bileşenlere taşınacak)
 - Yutulan tıklama overlay'e pencere mesajı üretmez; toolbar ve çizim yönlendirmesi hook içinden yapılmalı (plan varsayımı doğruydu).
@@ -75,3 +76,4 @@ Güncelleme kuralı: bir madde bitince `[x]` yapılır, tarih ve kısa not eklen
 | Tarih | Not |
 |---|---|
 | 12 Kasım 2026 | M1 kodu tamamlandı: iskelet + interop (hook, layered window, ULW/ULWI, imleç stratejisi) + prototip overlay + tray; 18 test geçti; `--hookcheck` (kur/kapat/yeniden kur + callback ölçümleri) ve 4K spike (stress/gerçekçi/kirli bölge) çalıştırıldı; render kararı verildi (GDI+ kalır). Etkileşim matrisi maddeleri (çizim yutma, toolbar, çift Shift, down/up, Esc, çift DPI) manuel doğrulamada. |
+| 12 Kasım 2026 | E2E harness (`scripts/e2e-m1.ps1`) eklendi; test matrisi 1–5 otomatik doğrulandı (10/10 PASS). Bulunan/düzeltilen: Esc/toolbar-exit `ActiveRequested`'i bozuyordu → tüm deaktive tek yol `SetActive(false)`; DPI ölçek `%150` tam sayı bölme hatası düzeltildi (yuvarlama). Kalan: imleç gizleme görsel onay, çift-DPI, Win+L (donanım gerektirir). |
