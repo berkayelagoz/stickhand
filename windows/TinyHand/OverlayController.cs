@@ -69,6 +69,15 @@ public sealed class OverlayController : IDisposable
     private Point _lastDrawnTail;
     private int _lastDrawnStrokeCount;
 
+    // Live FPS HUD state: rolling ring of last frame periods (ticks) + the text
+    // last painted, so the compositor can dirty just the HUD rect on change.
+    private readonly long[] _framePeriodTicks = new long[128];
+    private int _framePeriodHead;
+    private int _framePeriodCount;
+    private long _lastFrameTs;
+    private string _lastRenderedHud = "";
+    private string _fpsHud = "";
+
     // ---- thread-shared state ----
     private volatile bool _active;
     private volatile bool _clickThrough;
@@ -261,6 +270,10 @@ public sealed class OverlayController : IDisposable
         MarkActivity();
         _fpsFrames = 0;
         _fpsWindowStart = _clock.ElapsedMilliseconds;
+        _framePeriodCount = 0;
+        _framePeriodHead = 0;
+        _lastFrameTs = 0;
+        _lastRenderedHud = "";
 
         _active = true;
         _dirty = true;
@@ -410,6 +423,7 @@ public sealed class OverlayController : IDisposable
 
         bool statusChanged = !ReferenceEquals(snapshot.Status, _lastRenderedStatus)
                              && snapshot.Status != _lastRenderedStatus;
+        bool hudChanged = snapshot.FpsHud != _lastRenderedHud;
 
         long drawTicksAcc = 0, presentTicksAcc = 0;
         foreach (var part in overlays)
@@ -444,6 +458,11 @@ public sealed class OverlayController : IDisposable
                         var strip = new Rectangle(0, bounds.Height - 130 * scale, bounds.Width, 130 * scale);
                         dirty = Rectangle.Union(dirty, strip);
                     }
+                    if (hudChanged && part.IsPrimary)
+                    {
+                        var hud = HandScene.HudRect(part.Monitor, scale);
+                        dirty = Rectangle.Union(dirty, hud);
+                    }
                     dirty.Intersect(new Rectangle(0, 0, bounds.Width, bounds.Height));
                     if (dirty.Width > 0 && dirty.Height > 0) clip = dirty;
                     else continue; // nothing changed on this monitor this frame
@@ -474,6 +493,17 @@ public sealed class OverlayController : IDisposable
         Interlocked.Add(ref _presentTicks, presentTicksAcc);
         Interlocked.Increment(ref _frameSamples);
 
+        // Rolling frame-period history for the HUD (jitter visibility: p95/max
+        // expose pacing hitches that a plain fps count hides).
+        long ts = Stopwatch.GetTimestamp();
+        if (_lastFrameTs != 0)
+        {
+            _framePeriodTicks[_framePeriodHead] = ts - _lastFrameTs;
+            _framePeriodHead = (_framePeriodHead + 1) & (_framePeriodTicks.Length - 1);
+            if (_framePeriodCount < _framePeriodTicks.Length) _framePeriodCount++;
+        }
+        _lastFrameTs = ts;
+
         // Real-cursor suppression in drawing mode is handled in WM_SETCURSOR
         // (the alpha=1 background keeps the overlay in the hit-test for every
         // delivered move, so the blank cursor is refreshed on input activity).
@@ -495,8 +525,27 @@ public sealed class OverlayController : IDisposable
                 ? $"TinyHand M1 | mode {(_clickThrough ? "click-through" : "draw")} | {_fps} fps | mouse cb p95 {mouseStats?.P95Ms ?? 0:0.000} ms | kbd cb p95 {kbdStats?.P95Ms ?? 0:0.000} ms | strokes {snapshot.Strokes.Count} | Ctrl+Alt+H toggle | Esc close | Ctrl+Alt+Q exit app"
                 : $"TinyHand M1 | mode {(_clickThrough ? "click-through" : "draw")} | {_fps} fps | Ctrl+Alt+H toggle | Esc close | Ctrl+Alt+Q exit app";
             _statusRefreshAt = now + 250;
+
+            var (p95, max) = FramePeriodStatsMs();
+            _fpsHud = busy
+                ? $"{_fps} fps | p95 {p95:0.0} / max {max:0.0} ms | draw {DrawAvgMs:0.0} / present {PresentAvgMs:0.0}"
+                : $"{_fps} fps idle | p95 {p95:0.0} / max {max:0.0} ms";
         }
         _lastRenderedStatus = snapshot.Status;
+        _lastRenderedHud = snapshot.FpsHud;
+    }
+
+    /// <summary>p95 and max of recent frame periods in ms (sorted copy of the ring).</summary>
+    private (double p95, double max) FramePeriodStatsMs()
+    {
+        int n = Math.Min(_framePeriodCount, _framePeriodTicks.Length);
+        if (n == 0) return (0, 0);
+        var arr = new long[n];
+        Array.Copy(_framePeriodTicks, arr, n);
+        Array.Sort(arr);
+        double p95 = arr[(int)Math.Round(0.95 * (n - 1))] * 1000.0 / Stopwatch.Frequency;
+        double max = arr[n - 1] * 1000.0 / Stopwatch.Frequency;
+        return (p95, max);
     }
 
     /// <summary>
@@ -556,7 +605,8 @@ public sealed class OverlayController : IDisposable
             Toolbar: _toolbar ?? [],
             IsPrimary: _primaryMonitor?.IsPrimary ?? false,
             DpiX: (int)(_primaryMonitor?.DpiX ?? 96),
-            Status: _status);
+            Status: _status,
+            FpsHud: _fpsHud);
     }
 
     // =====================================================================

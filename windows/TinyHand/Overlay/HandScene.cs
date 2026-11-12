@@ -12,9 +12,10 @@ public sealed record SceneSnapshot(
     List<ToolbarButton> Toolbar,
     bool IsPrimary,
     int DpiX,
-    string Status)
+    string Status,
+    string FpsHud)
 {
-    public static SceneSnapshot Empty { get; } = new(new Point(), false, [], [], false, 96, "");
+    public static SceneSnapshot Empty { get; } = new(new Point(), false, [], [], false, 96, "", "");
 }
 
 /// <summary>
@@ -83,6 +84,16 @@ public sealed class HandScene
                 : StatusFontCache[scale] = new Font("Consolas", 12f);
     }
 
+    private static readonly Dictionary<int, Font> HudFontCache = new();
+
+    private static Font HudFont(int scale)
+    {
+        lock (HudFontCache)
+            return HudFontCache.TryGetValue(scale, out var f)
+                ? f
+                : HudFontCache[scale] = new Font("Consolas", 13f * scale, FontStyle.Bold);
+    }
+
     private static Bitmap LoadHand()
     {
         var asm = typeof(HandScene).Assembly;
@@ -130,6 +141,7 @@ public sealed class HandScene
         {
             DrawToolbar(g, scene.Toolbar, scale);
             DrawStatus(g, monitor, scene.Status, scale);
+            DrawHud(g, monitor, scene.FpsHud, scale);
         }
 
         if (clip.HasValue) g.ResetClip();
@@ -200,5 +212,32 @@ public sealed class HandScene
         float x = 14 * scale;
         float y = monitor.Bounds.Height - 28 * scale;
         g.DrawString(status, StatusFont(scale), brush, x, y);
+    }
+
+    /// <summary>Local-space rect of the live FPS HUD chip (primary monitor, top-right).
+    /// The compositor unions this into the dirty region whenever the HUD text changes.</summary>
+    public static Rectangle HudRect(MonitorInfo monitor, int scale)
+    {
+        int h = 48 * scale;
+        int w = 340 * scale;
+        return new Rectangle(monitor.Bounds.Width - w - 20 * scale, 16 * scale, w, h);
+    }
+
+    private static void DrawHud(Graphics g, MonitorInfo monitor, string text, int scale)
+    {
+        if (string.IsNullOrEmpty(text)) return;
+        var rect = HudRect(monitor, scale);
+        using var bg = new SolidBrush(Color.FromArgb(220, 20, 20, 26));
+        using var border = new Pen(Color.FromArgb(255, 244, 51, 118), 1.5f * scale);
+        using var brush = new SolidBrush(Color.FromArgb(255, 255, 255, 255));
+        var format = new StringFormat
+        {
+            Alignment = StringAlignment.Center,
+            LineAlignment = StringAlignment.Center,
+        };
+        g.FillRectangle(bg, rect);
+        g.DrawRectangle(border, rect);
+        var rectf = new RectangleF(rect.X, rect.Y, rect.Width, rect.Height);
+        g.DrawString(text, HudFont(scale), brush, rectf, format);
     }
 }
