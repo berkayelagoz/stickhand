@@ -32,12 +32,14 @@ internal sealed class AppHost : ApplicationContext
         _hotkeys = new HotkeyHost();
         _hotkeys.HotkeyPressed += OnHotkey;
         if (!_hotkeys.RegisterToggle())
-            Debug.WriteLine($"RegisterHotKey failed: {Marshal.GetLastWin32Error()}");
+            Debug.WriteLine($"RegisterHotKey toggle failed: {Marshal.GetLastWin32Error()}");
+        if (!_hotkeys.RegisterQuit())
+            Debug.WriteLine($"RegisterHotKey quit failed: {Marshal.GetLastWin32Error()}");
 
         _toggleItem = new ToolStripMenuItem("Active (Ctrl+Alt+H)") { Checked = false, CheckOnClick = true };
         _toggleItem.Click += (_, _) => Toggle();
 
-        var exitItem = new ToolStripMenuItem("Exit TinyHand");
+        var exitItem = new ToolStripMenuItem("Exit TinyHand (Ctrl+Alt+Q)");
         exitItem.Click += (_, _) => Exit();
 
         var menu = new ContextMenuStrip();
@@ -66,7 +68,16 @@ internal sealed class AppHost : ApplicationContext
 
     private void OnHotkey(int id)
     {
-        if (id == HotkeyHost.ToggleId) Toggle();
+        switch (id)
+        {
+            case HotkeyHost.ToggleId:
+                Toggle();
+                break;
+            case HotkeyHost.QuitId:
+                // Full quit from any state, including while the overlay holds the cursor.
+                Exit();
+                break;
+        }
     }
 
     private void Toggle() => _controller.SetActive(!_controller.ActiveRequested);

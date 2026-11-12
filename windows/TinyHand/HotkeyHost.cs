@@ -13,6 +13,9 @@ internal sealed class HotkeyHost : NativeWindow, IDisposable
     public const uint ToggleModifiers = Win32.MOD_CONTROL | Win32.MOD_ALT;
     public const uint ToggleVk = 0x48; // 'H'
 
+    public const int QuitId = 2;
+    public const uint QuitVk = 0x51; // 'Q' — full app quit (tray menu also has Exit)
+
     public event Action<int>? HotkeyPressed;
 
     public HotkeyHost()
@@ -23,9 +26,13 @@ internal sealed class HotkeyHost : NativeWindow, IDisposable
     public bool RegisterToggle() =>
         User32.RegisterHotKey(Handle, ToggleId, ToggleModifiers | Win32.MOD_NOREPEAT, ToggleVk);
 
+    public bool RegisterQuit() =>
+        User32.RegisterHotKey(Handle, QuitId, ToggleModifiers | Win32.MOD_NOREPEAT, QuitVk);
+
     public void Dispose()
     {
         User32.UnregisterHotKey(Handle, ToggleId);
+        User32.UnregisterHotKey(Handle, QuitId);
         DestroyHandle();
     }
 

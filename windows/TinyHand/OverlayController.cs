@@ -382,8 +382,8 @@ public sealed class OverlayController : IDisposable
             var mouseStats = _hooks?.MouseStats.TakeSnapshot();
             var kbdStats = _hooks?.KeyboardStats.TakeSnapshot();
             _status = busy
-                ? $"TinyHand M1 | mode {(_clickThrough ? "click-through" : "draw")} | {_fps} fps | mouse cb p95 {mouseStats?.P95Ms ?? 0:0.000} ms | kbd cb p95 {kbdStats?.P95Ms ?? 0:0.000} ms | strokes {snapshot.Strokes.Count} | Ctrl+Alt+H toggle | Esc quit"
-                : $"TinyHand M1 | mode {(_clickThrough ? "click-through" : "draw")} | {_fps} fps | Ctrl+Alt+H toggle | Esc quit";
+                ? $"TinyHand M1 | mode {(_clickThrough ? "click-through" : "draw")} | {_fps} fps | mouse cb p95 {mouseStats?.P95Ms ?? 0:0.000} ms | kbd cb p95 {kbdStats?.P95Ms ?? 0:0.000} ms | strokes {snapshot.Strokes.Count} | Ctrl+Alt+H toggle | Esc close | Ctrl+Alt+Q exit app"
+                : $"TinyHand M1 | mode {(_clickThrough ? "click-through" : "draw")} | {_fps} fps | Ctrl+Alt+H toggle | Esc close | Ctrl+Alt+Q exit app";
             _statusRefreshAt = now + 250;
         }
     }

@@ -34,7 +34,7 @@ public static class ToolbarModel
         [
             new ToolbarButton("click_through", ToggleLabel(clickThrough),
                 new System.Drawing.Rectangle(x0, y, ToggleWidthPx * s, h)),
-            new ToolbarButton("exit", "Exit",
+            new ToolbarButton("exit", "Exit (Esc)",
                 new System.Drawing.Rectangle(x0 + (ToggleWidthPx + GapPx) * s, y, ExitWidthPx * s, h)),
         ];
     }
