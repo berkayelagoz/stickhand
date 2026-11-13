@@ -83,6 +83,10 @@ public static class HandPoseSolver
     /// <summary>Opacity added at full press (0.20 → 0.28).</summary>
     public const float ShadowPressOpacity = 0.08f;
 
+    /// <summary>Windows tuning: the macOS offset (0.6 × lift, lift) puts the shadow far below
+    /// the hand; the shadow now sits close to it (user request, 14 Kasım 2026).</summary>
+    public const float ShadowOffsetScale = 0.3f;
+
     /// <summary>Grip x target for a cursor position (macOS clamps to 15 %..105 % of the width).</summary>
     public static float GripTargetX(float cursorX, Rectangle monitor)
     {
@@ -133,9 +137,10 @@ public static class HandPoseSolver
 
         float lift = LiftFrac * screenH * (1 - PressLiftShrink * press);
         // macOS pre-rotates the CALayer shadow offset by −rotation, which cancels the layer
-        // rotation: the shadow keeps a fixed screen-space direction (down-right).
-        float shadowDx = lift * 0.6f;
-        float shadowDy = lift;
+        // rotation: the shadow keeps a fixed screen-space direction (down-right). The Windows
+        // tuning scales it down so the shadow hugs the hand instead of floating far below it.
+        float shadowDx = lift * 0.6f * ShadowOffsetScale;
+        float shadowDy = lift * ShadowOffsetScale;
         // The resting hand floats high: its shadow is a little larger and more transparent
         // than the pressed one (user request, 14 Kasım 2026), so the lift reads as height.
         float shadowScale = 1 + ShadowRestScale * (1 - press);

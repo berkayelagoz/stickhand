@@ -101,9 +101,11 @@ public class HandPoseTests
         Assert.Equal(0.28f, pressed.ShadowOpacity, 3);
         Assert.Equal(1.08f, rest.ShadowScale, 3);
         Assert.Equal(1f, pressed.ShadowScale, 3);
-        // Offset is a fixed screen-space direction (down-right), scaled by the lift.
-        Assert.Equal(rest.Lift * 0.6f, rest.ShadowDx, 1);
-        Assert.Equal(rest.Lift, rest.ShadowDy, 1);
+        // Offset is a fixed screen-space direction (down-right), scaled by the lift and by the
+        // Windows tuning factor (the shadow sits close to the hand).
+        Assert.Equal(rest.Lift * 0.6f * HandPoseSolver.ShadowOffsetScale, rest.ShadowDx, 1);
+        Assert.Equal(rest.Lift * HandPoseSolver.ShadowOffsetScale, rest.ShadowDy, 1);
+        Assert.True(rest.ShadowDy < rest.Lift / 2, $"offset={rest.ShadowDy} lift={rest.Lift}");
         Assert.True(pressed.ShadowDy < rest.ShadowDy);
     }
 
