@@ -18,18 +18,20 @@ using DWriteFactoryType = Vortice.DirectWrite.FactoryType;
 
 namespace TinyHand.Overlay;
 
-/// <summary>Immutable snapshot of the scene, copied under lock for each frame.</summary>
+/// <summary>Immutable snapshot of the scene, copied under lock for each frame.
+/// Ink is NOT in the snapshot: strokes live in the InkJournal and are painted
+/// incrementally into each monitor's InkLayer bitmap (O(new points) per frame,
+/// not O(total ink)).</summary>
 public sealed record SceneSnapshot(
     Point Cursor,
     bool ClickThrough,
-    List<List<Point>> Strokes,
     List<ToolbarButton> Toolbar,
     bool IsPrimary,
     int DpiX,
     string Status,
     string FpsHud)
 {
-    public static SceneSnapshot Empty { get; } = new(new Point(), false, [], [], false, 96, "", "");
+    public static SceneSnapshot Empty { get; } = new(new Point(), false, [], false, 96, "", "");
 }
 
 /// <summary>
@@ -98,7 +100,7 @@ public sealed class HandScene
     {
         public required ID2D1DeviceContext Context { get; init; }
         public required ID2D1StrokeStyle RoundStroke { get; init; }
-        public required ID2D1SolidColorBrush Ink { get; init; }
+        public required InkLayer Ink { get; init; }
         public required ID2D1SolidColorBrush Label { get; init; }
         public required ID2D1SolidColorBrush ToolbarBg { get; init; }
         public required ID2D1SolidColorBrush ToolbarBorder { get; init; }
@@ -192,7 +194,6 @@ public sealed class HandScene
                 foreach (var bitmap in _handCache.Values) bitmap.Dispose();
                 _handCache.Clear();
             }
-            Ink.Dispose();
             Label.Dispose();
             ToolbarBg.Dispose();
             ToolbarBorder.Dispose();
@@ -202,12 +203,14 @@ public sealed class HandScene
             HudBorder.Dispose();
             HudText.Dispose();
             RoundStroke.Dispose();
+            Ink.Dispose();
             // Context is owned by OverlaySurface, not the scene resources.
         }
     }
 
-    public SceneResources CreateResources(OverlayRenderer renderer, ID2D1DeviceContext context)
+    public SceneResources CreateResources(OverlayRenderer renderer, ID2D1DeviceContext context, MonitorInfo monitor)
     {
+        int scale = Math.Max(1, (int)Math.Round(monitor.DpiX / 96.0, MidpointRounding.AwayFromZero));
         var roundStroke = renderer.D2dFactory.CreateStrokeStyle(new StrokeStyleProperties
         {
             StartCap = CapStyle.Round,
@@ -224,7 +227,7 @@ public sealed class HandScene
         {
             Context = context,
             RoundStroke = roundStroke,
-            Ink = brush(244 / 255f, 51 / 255f, 118 / 255f, 1),
+            Ink = new InkLayer(renderer, monitor, scale),
             Label = brush(244 / 255f, 51 / 255f, 90 / 255f, 1),
             ToolbarBg = brush(28 / 255f, 28 / 255f, 32 / 255f, 245 / 255f),
             ToolbarBorder = brush(1, 1, 1, 1),
@@ -270,7 +273,7 @@ public sealed class HandScene
         float ox = -monitor.Bounds.X;
         float oy = -monitor.Bounds.Y;
 
-        DrawStrokes(ctx, res, scene.Strokes, scale, ox, oy);
+        DrawInk(ctx, res, monitor);
         DrawHand(ctx, res, scene, scale, ox, oy);
 
         if (scene.IsPrimary)
@@ -281,21 +284,15 @@ public sealed class HandScene
         }
     }
 
-    private static void DrawStrokes(ID2D1DeviceContext ctx, SceneResources res, List<List<Point>> strokes,
-        int scale, float ox, float oy)
+    /// <summary>Blit the persistent per-monitor ink bitmap (segments painted once at
+    /// append time by InkLayer, not per frame anymore). Skipped while the layer is
+    /// empty so a fresh overlay does not pay the bitmap blit.</summary>
+    private static void DrawInk(ID2D1DeviceContext ctx, SceneResources res, MonitorInfo monitor)
     {
-        if (strokes.Count == 0) return;
-        float width = 4f * scale;
-        foreach (var stroke in strokes)
-        {
-            if (stroke.Count < 2) continue; // same as the M1 renderer: bare dots are not ink
-            for (int i = 1; i < stroke.Count; i++)
-            {
-                var p0 = new Vector2(stroke[i - 1].X + ox, stroke[i - 1].Y + oy);
-                var p1 = new Vector2(stroke[i].X + ox, stroke[i].Y + oy);
-                ctx.DrawLine(p0, p1, res.Ink, width, res.RoundStroke);
-            }
-        }
+        if (!res.Ink.HasInk) return;
+        var ink = res.Ink.Bitmap;
+        ctx.DrawBitmap(ink, new Rect(0, 0, monitor.Bounds.Width, monitor.Bounds.Height), 1f,
+            BitmapInterpolationMode.Linear, new Rect(0, 0, ink.Size.Width, ink.Size.Height));
     }
 
     private static void DrawHand(ID2D1DeviceContext ctx, SceneResources res, in SceneSnapshot scene,

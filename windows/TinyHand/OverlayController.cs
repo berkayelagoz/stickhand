@@ -109,8 +109,13 @@ public sealed class OverlayController : IDisposable
     private readonly MouseDragTracker _dragTracker = new();
     private readonly DoublePressDetector _doubleShift = new(() => Environment.TickCount64);
     private bool _drawing;
-    private readonly object _strokeLock = new();
-    private List<List<Point>> _strokes = [];
+
+    // Ink feed: hook appends segments, each monitor's InkLayer applies only the new
+    // ones into its persistent bitmap. Nothing copies point lists per frame anymore
+    // (that per-frame O(total ink) work is what made fps decay as ink grew).
+    private readonly InkJournal _journal = new();
+    private Point? _lastInkPoint;
+    private int _strokeCount;
 
     // ---- overlay-thread state ----
     private readonly HandScene _scene = new();
@@ -393,7 +398,7 @@ public sealed class OverlayController : IDisposable
                     Monitor = monitor,
                     Window = window,
                     Surface = surface,
-                    Resources = _scene.CreateResources(_renderer, surface.Context),
+                    Resources = _scene.CreateResources(_renderer, surface.Context, monitor),
                 });
             }
         }
@@ -470,6 +475,10 @@ private void RenderFrame(bool busy)
                 var snapshot = snapshotBase with { IsPrimary = part.Monitor.IsPrimary };
                 var surface = part.Surface;
 
+                // Feed new ink into the persistent bitmap first (O(new segments) —
+                // never proportional to total ink drawn this session).
+                part.Resources.Ink.Sync(_journal);
+
                 long d0 = Stopwatch.GetTimestamp();
                 surface.BeginDraw();
                 _scene.Draw(surface.Context, part.Resources, part.Monitor, in snapshot);
@@ -525,7 +534,7 @@ private void RenderFrame(bool busy)
             var mouseStats = _hooks?.MouseStats.TakeSnapshot();
             var kbdStats = _hooks?.KeyboardStats.TakeSnapshot();
             _status = busy
-                ? $"TinyHand M1.5 | mode {(_clickThrough ? "click-through" : "draw")} | {_fps} fps | mouse cb p95 {mouseStats?.P95Ms ?? 0:0.000} ms | kbd cb p95 {kbdStats?.P95Ms ?? 0:0.000} ms | strokes {snapshotBase.Strokes.Count} | Ctrl+Alt+H toggle | Esc close | Ctrl+Alt+Q exit app"
+                ? $"TinyHand M1.5 | mode {(_clickThrough ? "click-through" : "draw")} | {_fps} fps | mouse cb p95 {mouseStats?.P95Ms ?? 0:0.000} ms | kbd cb p95 {kbdStats?.P95Ms ?? 0:0.000} ms | strokes {Volatile.Read(ref _strokeCount)} | Ctrl+Alt+H toggle | Esc close | Ctrl+Alt+Q exit app"
                 : $"TinyHand M1.5 | mode {(_clickThrough ? "click-through" : "draw")} | {_fps} fps | Ctrl+Alt+H toggle | Esc close | Ctrl+Alt+Q exit app";
             _statusRefreshAt = now + 250;
 
@@ -586,15 +595,9 @@ private void RenderFrame(bool busy)
 
     private SceneSnapshot BuildSnapshot()
     {
-        List<List<Point>> strokes;
-        lock (_strokeLock)
-        {
-            strokes = _strokes.Select(s => new List<Point>(s)).ToList();
-        }
         return new SceneSnapshot(
             Cursor: new Point((int)Interlocked.Read(ref _cursorX), (int)Interlocked.Read(ref _cursorY)),
             ClickThrough: _clickThrough,
-            Strokes: strokes,
             Toolbar: _toolbar ?? [],
             IsPrimary: _primaryMonitor?.IsPrimary ?? false,
             DpiX: (int)(_primaryMonitor?.DpiX ?? 96),
@@ -641,6 +644,7 @@ private void RenderFrame(bool busy)
                 if (_drawing)
                 {
                     _drawing = false;
+                    _lastInkPoint = null; // stroke finished: the next down starts a fresh anchor
                     _dirty = true;
                 }
                 return swallow;
@@ -684,8 +688,8 @@ private void RenderFrame(bool busy)
         if (tracked)
         {
             _drawing = true;
-            var p = new Point((int)Interlocked.Read(ref _cursorX), (int)Interlocked.Read(ref _cursorY));
-            lock (_strokeLock) _strokes.Add([p]);
+            _lastInkPoint = new Point((int)Interlocked.Read(ref _cursorX), (int)Interlocked.Read(ref _cursorY));
+            Interlocked.Increment(ref _strokeCount);
             _dirty = true;
             return true;
         }
@@ -761,17 +765,19 @@ private void RenderFrame(bool busy)
 
     private void AppendStroke(int x, int y)
     {
-        lock (_strokeLock)
-        {
-            if (_strokes.Count > 0) _strokes[^1].Add(new Point(x, y));
-        }
+        var to = new Point(x, y);
+        if (_lastInkPoint is { } from)
+            _journal.AddSegment(from, to);
+        _lastInkPoint = to;
         _dirty = true;
     }
 
     private void ClearStrokes()
     {
-        lock (_strokeLock) _strokes = new List<List<Point>>(8);
+        _journal.Clear();
+        _lastInkPoint = null;
         _drawing = false;
+        Interlocked.Exchange(ref _strokeCount, 0);
         _dirty = true;
     }
 

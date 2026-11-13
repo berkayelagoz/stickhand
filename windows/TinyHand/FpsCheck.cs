@@ -16,6 +16,8 @@ namespace TinyHand;
 internal static class FpsCheck
 {
     private const uint MOUSEEVENTF_MOVE = 0x0001;
+    private const uint MOUSEEVENTF_LEFTDOWN = 0x0002;
+    private const uint MOUSEEVENTF_LEFTUP = 0x0004;
 
     public static int Run(string[] args)
     {
@@ -24,18 +26,20 @@ internal static class FpsCheck
         int seconds = 5;
         int movesPerSec = 200;
         int px = 2;
+        bool ink = false;
         for (int i = 0; i < args.Length - 1; i++)
         {
             if (args[i] == "--seconds") seconds = int.Parse(args[i + 1]);
             if (args[i] == "--movesps") movesPerSec = int.Parse(args[i + 1]);
             if (args[i] == "--px") px = int.Parse(args[i + 1]);
             if (args[i] == "--opaque") HandScene.OpaqueBackground = true;
+            if (args[i] == "--ink") ink = true;
         }
         _ = movesPerSec;
 
         var mode = Monitors.CurrentMode();
         string pattern = px <= 2 ? "wiggle" : $"circle radius {px}px";
-        Console.WriteLine($"fpscheck: display={mode?.width}x{mode?.height} @ {mode?.hz} Hz, {seconds}s, {pattern}");
+        Console.WriteLine($"fpscheck: display={mode?.width}x{mode?.height} @ {mode?.hz} Hz, {seconds}s, {pattern}{(ink ? ", ink drawing" : "")}");
 
         using var controller = new OverlayController();
         controller.SetActive(true);
@@ -61,6 +65,10 @@ internal static class FpsCheck
         int samples = 0;
         double sumFps = 0, sumDraw = 0, sumPresent = 0, sumP95 = 0, sumMax = 0;
         double nextSample = warmupSeconds;
+        // --ink: hold the left button so the wiggle/circle feeds real ink into the
+        // overlay; strokes grow at movesPerSec points/sec. Exposes draw cost that
+        // scales with total ink length (the M1.5 report: fps drops while drawing).
+        if (ink) User32.mouse_event(MOUSEEVENTF_LEFTDOWN, 0, 0, 0, UIntPtr.Zero);
         while (sw.Elapsed.TotalSeconds < seconds)
         {
             int dx, dy;
@@ -100,6 +108,7 @@ internal static class FpsCheck
             }
         }
 
+        if (ink) User32.mouse_event(MOUSEEVENTF_LEFTUP, 0, 0, 0, UIntPtr.Zero);
         controller.SetActive(false);
         Thread.Sleep(500);
 
