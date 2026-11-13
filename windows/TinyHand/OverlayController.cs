@@ -125,8 +125,9 @@ public sealed class OverlayController : IDisposable
     // only the new points into its live bitmap and freezes finished strokes for the fade.
     private readonly InkJournal _journal = new();
     private readonly InkSmoother _smoother = new();
-    private Point _downPoint;
-    private Point _lastInkPoint;
+    private readonly InkStabilizer _stabilizer = new();
+    private PointF _downPoint;
+    private PointF _lastInkPoint;
     private bool _strokeStarted;
     private bool _ctrlDown;
     private int _strokeCount;
@@ -728,9 +729,10 @@ private void RenderFrame(bool busy)
                     _drawing = false;
                     if (_strokeStarted)
                     {
-                        // Catch the stroke up to the release point: the filter trails the
-                        // cursor by a few pixels at speed.
-                        AppendStroke(e.X, e.Y, raw: true);
+                        // Catch the stroke up to the release point: the filter and the
+                        // stabilizer trail the cursor, so drain them instead of jumping to
+                        // the raw point (a jump would leave a straight tail at the end).
+                        AppendRelease(e.X, e.Y);
                         _journal.End();
                         _strokeStarted = false;
                     }
@@ -784,8 +786,9 @@ private void RenderFrame(bool busy)
         {
             _drawing = true;
             _smoother.Reset();
+            _stabilizer.Reset();
             _downPoint = _smoother.Filter(
-                new Point((int)Interlocked.Read(ref _cursorX), (int)Interlocked.Read(ref _cursorY)),
+                new PointF((float)Interlocked.Read(ref _cursorX), (float)Interlocked.Read(ref _cursorY)),
                 _clock.Elapsed.TotalSeconds, Preferences.SmoothingLevel);
             _lastInkPoint = _downPoint;
             _strokeStarted = false;
@@ -913,14 +916,14 @@ private void RenderFrame(bool busy)
 
     /// <summary>macOS OverlayController.drag(): the stroke starts only after 4 pt of movement
     /// (a plain click leaves no ink), then every point at least 1.5 pt away is appended.
-    /// Points pass through the One Euro filter first, so the hand's jitter does not wobble
-    /// the line; <paramref name="raw"/> skips the filter for the release catch-up.</summary>
-    private void AppendStroke(int x, int y, bool raw = false)
+    /// Points pass through the One Euro filter and then the streamline stabilizer, so the
+    /// hand's jitter and the mouse's 1 px quantization do not wobble the line.</summary>
+    private void AppendStroke(int x, int y)
     {
-        var to = raw
-            ? new Point(x, y)
-            : _smoother.Filter(new Point(x, y), _clock.Elapsed.TotalSeconds, Preferences.SmoothingLevel);
         int scale = PrimaryScale();
+        var to = _stabilizer.Push(
+            _smoother.Filter(new PointF(x, y), _clock.Elapsed.TotalSeconds, Preferences.SmoothingLevel),
+            SmoothingPresets.Window(Preferences.SmoothingLevel) * scale);
         if (!_strokeStarted)
         {
             if (InkGeometry.Distance(_downPoint, to) < 4 * scale) return;
@@ -929,9 +932,27 @@ private void RenderFrame(bool busy)
             _lastInkPoint = _downPoint;
             Interlocked.Increment(ref _strokeCount);
         }
-        if (!InkMetrics.ShouldAppend(_lastInkPoint, to, scale)) return;
-        _journal.Extend(to);
-        _lastInkPoint = to;
+        AppendPoint(to, scale);
+    }
+
+    /// <summary>Release catch-up: the stabilizer trails the cursor by ~5 px, so shrink its
+    /// window to zero while pushing the release point. The weighted average converges to the
+    /// cursor along a smooth curve instead of jumping there with a straight tail.</summary>
+    private void AppendRelease(int x, int y)
+    {
+        int scale = PrimaryScale();
+        var release = new PointF(x, y);
+        double window = SmoothingPresets.Window(Preferences.SmoothingLevel) * scale;
+        foreach (var point in _stabilizer.Drain(release, window))
+            AppendPoint(point, scale);
+        AppendPoint(release, scale); // the stroke must end exactly under the cursor
+    }
+
+    private void AppendPoint(PointF point, int scale)
+    {
+        if (!InkMetrics.ShouldAppend(_lastInkPoint, point, scale)) return;
+        _journal.Extend(point);
+        _lastInkPoint = point;
         _dirty = true;
     }
 

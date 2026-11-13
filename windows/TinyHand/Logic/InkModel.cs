@@ -141,7 +141,7 @@ public static class InkMetrics
         Math.Max(MinHeadPoints * scale, lineWidth * HeadFactor);
 
     /// <summary>True when the new point is far enough from the last one to be appended.</summary>
-    public static bool ShouldAppend(Point last, Point next, int scale)
+    public static bool ShouldAppend(PointF last, PointF next, int scale)
     {
         double dx = next.X - last.X;
         double dy = next.Y - last.Y;
@@ -204,15 +204,17 @@ public static class InkFade
     }
 }
 
-/// <summary>macOS <c>Ink.smoothPath</c> / <c>Ink.addHead</c> geometry, kept pure for tests.</summary>
+/// <summary>macOS <c>Ink.smoothPath</c> / <c>Ink.addHead</c> geometry, kept pure for tests.
+/// Points are sub-pixel: the smoothed centreline must not be re-quantized to whole pixels,
+/// otherwise the stroke edge inherits a 1 px staircase.</summary>
 public static class InkGeometry
 {
     /// <summary>
     /// Arrow head at the end of a stroke: two lines from the end point, aimed along the last
     /// stretch (a wobble at the very end must not twist the head). Mirrors <c>Ink.addHead</c>.
     /// </summary>
-    public static bool TryHead(IReadOnlyList<Point> points, float lineWidth, int scale,
-        out Point end, out Point left, out Point right)
+    public static bool TryHead(IReadOnlyList<PointF> points, float lineWidth, int scale,
+        out PointF end, out PointF left, out PointF right)
     {
         end = left = right = default;
         if (points.Count == 0) return false;
@@ -221,7 +223,7 @@ public static class InkGeometry
         float size = InkMetrics.HeadSize(lineWidth, scale);
 
         // Last point at least size × 1.2 away from the end; the first point otherwise.
-        Point back = points[0];
+        PointF back = points[0];
         for (int i = points.Count - 1; i >= 0; i--)
         {
             if (Distance(points[i], end) >= size * 1.2)
@@ -243,18 +245,18 @@ public static class InkGeometry
     }
 
     /// <summary>Midpoint of two points (the smooth path's quad-curve endpoints).</summary>
-    public static Point Mid(Point a, Point b) => new((a.X + b.X) / 2, (a.Y + b.Y) / 2);
+    public static PointF Mid(PointF a, PointF b) => new((a.X + b.X) / 2, (a.Y + b.Y) / 2);
 
-    public static double Distance(Point a, Point b)
+    public static double Distance(PointF a, PointF b)
     {
         double dx = b.X - a.X;
         double dy = b.Y - a.Y;
         return Math.Sqrt(dx * dx + dy * dy);
     }
 
-    private static Point Offset(Point origin, double angle, float distance) => new(
-        origin.X + (int)Math.Round(Math.Cos(angle) * distance),
-        origin.Y + (int)Math.Round(Math.Sin(angle) * distance));
+    private static PointF Offset(PointF origin, double angle, float distance) => new(
+        origin.X + (float)(Math.Cos(angle) * distance),
+        origin.Y + (float)(Math.Sin(angle) * distance));
 }
 
 /// <summary>

@@ -23,8 +23,9 @@ public enum InkEventKind
 }
 
 /// <summary>One journal entry. <see cref="Arrow"/> is the Ctrl state at append time, so the
-/// head baked at <see cref="InkEventKind.End"/> cannot race a later Ctrl release.</summary>
-public readonly record struct InkEvent(InkEventKind Kind, Point Point, bool Arrow);
+/// head baked at <see cref="InkEventKind.End"/> cannot race a later Ctrl release. Points are
+/// sub-pixel: the smoothed centreline is never re-quantized to whole pixels.</summary>
+public readonly record struct InkEvent(InkEventKind Kind, PointF Point, bool Arrow);
 
 /// <summary>
 /// Hook-thread -> compositor ink feed (M2). The hook appends stroke lifecycle events as they
@@ -48,9 +49,9 @@ public sealed class InkJournal
         set => _arrow = value;
     }
 
-    public void Begin(Point point) => Append(new InkEvent(InkEventKind.Begin, point, _arrow));
+    public void Begin(PointF point) => Append(new InkEvent(InkEventKind.Begin, point, _arrow));
 
-    public void Extend(Point point) => Append(new InkEvent(InkEventKind.Extend, point, _arrow));
+    public void Extend(PointF point) => Append(new InkEvent(InkEventKind.Extend, point, _arrow));
 
     public void End() => Append(new InkEvent(InkEventKind.End, default, _arrow));
 
@@ -120,7 +121,7 @@ public sealed class InkLayer : IDisposable
     /// <summary>One smoothed-path piece: a quad curve (control point) or a straight line.
     /// <see cref="NewFigure"/> forces a separate subpath (the two arrow-head lines both start
     /// at the stroke end; continuing one figure would draw a bar between them).</summary>
-    private readonly record struct InkSegment(Point Start, Point Control, Point End, bool IsLine,
+    private readonly record struct InkSegment(PointF Start, PointF Control, PointF End, bool IsLine,
         bool NewFigure = false);
 
     private readonly ID2D1DeviceContext _ctx;
@@ -131,7 +132,7 @@ public sealed class InkLayer : IDisposable
     private readonly ID2D1StrokeStyle _style;
     private readonly ID2D1Factory1 _factory;
     private readonly List<FrozenStroke> _strokes = [];
-    private readonly List<Point> _points = [];
+    private readonly List<PointF> _points = [];
     private readonly Rectangle _monitorBounds;
     private readonly float _offX, _offY;
     private readonly float _width;
@@ -316,7 +317,7 @@ public sealed class InkLayer : IDisposable
     // Stroke painting (compositor thread)
     // =====================================================================
 
-    private void BeginStroke(Point point)
+    private void BeginStroke(PointF point)
     {
         if (_liveActive) Freeze(); // defensive: a Begin without End closes the previous stroke
         ClearLive();
@@ -328,7 +329,7 @@ public sealed class InkLayer : IDisposable
 
     /// <summary>macOS <c>Ink.smoothPath</c> incrementally: each new point adds the quad from
     /// the previous midpoint to the new midpoint, controlled by the previous point.</summary>
-    private void ExtendStroke(Point point, List<InkSegment> batch)
+    private void ExtendStroke(PointF point, List<InkSegment> batch)
     {
         var prev = _points[^1];
         if (_points.Count == 1)
@@ -384,7 +385,7 @@ public sealed class InkLayer : IDisposable
         var geometry = _factory.CreatePathGeometry();
         using var sink = geometry.Open();
         bool open = false;
-        Point current = default;
+        PointF current = default;
         foreach (var segment in segments)
         {
             // Disjoint pieces need their own figure; continuing the previous one would
@@ -511,21 +512,27 @@ public sealed class InkLayer : IDisposable
         _strokeCount = 0;
     }
 
-    private void ExpandLiveBounds(Point point)
+    private void ExpandLiveBounds(PointF point)
     {
+        // Floor + 1: the centreline is sub-pixel, so the blit and freeze boxes must cover the
+        // whole pixel the stroke touches. A zero-width box would reset the extent.
+        int left = (int)Math.Floor(point.X);
+        int top = (int)Math.Floor(point.Y);
+        int right = left + 1;
+        int bottom = top + 1;
         if (_liveBounds.Width <= 0 || _liveBounds.Height <= 0)
         {
-            _liveBounds = new Rectangle(point.X, point.Y, 1, 1);
+            _liveBounds = Rectangle.FromLTRB(left, top, right, bottom);
             return;
         }
         _liveBounds = Rectangle.FromLTRB(
-            Math.Min(_liveBounds.Left, point.X),
-            Math.Min(_liveBounds.Top, point.Y),
-            Math.Max(_liveBounds.Right, point.X),
-            Math.Max(_liveBounds.Bottom, point.Y));
+            Math.Min(_liveBounds.Left, left),
+            Math.Min(_liveBounds.Top, top),
+            Math.Max(_liveBounds.Right, right),
+            Math.Max(_liveBounds.Bottom, bottom));
     }
 
-    private Vector2 ToLocal(Point point) => new(point.X + _offX, point.Y + _offY);
+    private Vector2 ToLocal(PointF point) => new(point.X + _offX, point.Y + _offY);
 
     private static double NowSeconds() => (double)Stopwatch.GetTimestamp() / Stopwatch.Frequency;
 
