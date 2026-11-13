@@ -205,7 +205,8 @@ public sealed class HandScene
         }
     }
 
-    public SceneResources CreateResources(OverlayRenderer renderer, ID2D1DeviceContext context, MonitorInfo monitor)
+    public SceneResources CreateResources(OverlayRenderer renderer, ID2D1DeviceContext context, MonitorInfo monitor,
+        Color inkColor, double fadeSeconds)
     {
         int scale = Math.Max(1, (int)Math.Round(monitor.DpiX / 96.0, MidpointRounding.AwayFromZero));
         var roundStroke = renderer.D2dFactory.CreateStrokeStyle(new StrokeStyleProperties
@@ -224,7 +225,7 @@ public sealed class HandScene
         {
             Context = context,
             RoundStroke = roundStroke,
-            Ink = new InkLayer(renderer, monitor, scale),
+            Ink = new InkLayer(renderer, monitor, scale, inkColor, fadeSeconds),
             ToolbarBg = brush(28 / 255f, 28 / 255f, 32 / 255f, 245 / 255f),
             ToolbarBorder = brush(1, 1, 1, 1),
             ToolbarText = brush(1, 1, 1, 1),
@@ -279,15 +280,13 @@ public sealed class HandScene
         }
     }
 
-    /// <summary>Blit the persistent per-monitor ink bitmap (segments painted once at
-    /// append time by InkLayer, not per frame anymore). Skipped while the layer is
-    /// empty so a fresh overlay does not pay the bitmap blit.</summary>
+    /// <summary>Composite the per-monitor ink layer: frozen strokes with their fade opacity,
+    /// then the live stroke and its arrow head. Skipped while the layer is empty so a fresh
+    /// overlay does not pay the bitmap blit.</summary>
     private static void DrawInk(ID2D1DeviceContext ctx, SceneResources res, MonitorInfo monitor)
     {
         if (!res.Ink.HasInk) return;
-        var ink = res.Ink.Bitmap;
-        ctx.DrawBitmap(ink, new Rect(0, 0, monitor.Bounds.Width, monitor.Bounds.Height), 1f,
-            BitmapInterpolationMode.Linear, new Rect(0, 0, ink.Size.Width, ink.Size.Height));
+        res.Ink.Draw(ctx, monitor);
     }
 
     private static void DrawHand(ID2D1DeviceContext ctx, SceneResources res, in SceneSnapshot scene,

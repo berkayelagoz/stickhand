@@ -16,6 +16,9 @@ internal sealed class HotkeyHost : NativeWindow, IDisposable
     public const int QuitId = 2;
     public const uint QuitVk = 0x51; // 'Q' — full app quit (tray menu also has Exit)
 
+    public const int ClearId = 3;
+    public const uint ClearVk = 0x58; // 'X' — clear ink (macOS ⌃⌥X)
+
     public event Action<int>? HotkeyPressed;
 
     public HotkeyHost()
@@ -29,10 +32,14 @@ internal sealed class HotkeyHost : NativeWindow, IDisposable
     public bool RegisterQuit() =>
         User32.RegisterHotKey(Handle, QuitId, ToggleModifiers | Win32.MOD_NOREPEAT, QuitVk);
 
+    public bool RegisterClear() =>
+        User32.RegisterHotKey(Handle, ClearId, ToggleModifiers | Win32.MOD_NOREPEAT, ClearVk);
+
     public void Dispose()
     {
         User32.UnregisterHotKey(Handle, ToggleId);
         User32.UnregisterHotKey(Handle, QuitId);
+        User32.UnregisterHotKey(Handle, ClearId);
         DestroyHandle();
     }
 

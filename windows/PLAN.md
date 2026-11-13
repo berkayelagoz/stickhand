@@ -146,13 +146,14 @@ Karar gereği M2'den önce uygulanır; gerekçe spike bölümündeki sonuç notu
 - **Çıkış kriteri (karşılandı, 13 Kasım 2026):** present kuyruğa bırakma <1 ms'de, bloklama yok; 60 Hz ekranda kare periyotu p95 ~17 ms civarı sabitleşir; `fpscheck` wiggle + sweep senaryolarında görsel takılma kaybolur; e2e-m1 10/10, cursorcheck 7/7, birim testleri geçer; ölçümler PROGRESS'e kaydedilir.
 
 ### M2 — Çizim
-- [ ] Sürükle → mürekkep çizimi (Direct2D; M1.5 sonrası), renk/kalınluk ölçeği
+- [x] Sürükle → mürekkep çizimi (Direct2D; M1.5 sonrası), renk/kalınluk ölçeği *(13 Kasım 2026)*
   - Görsel sözleşme (macOS `Ink.swift` + `Preferences.InkChoice` — 13 Kasım 2026 kaynak taraması): **renk `InkChoice` ile belirlenir** — varsayılan `.match` = seçili el stilinin rengi (`PointerStyle` tablosundaki hex; kullanıcı gözlemi: "el hangi renkse o renkte çiziyor"); sabit seçenekler red/orange/yellow/green/blue/purple(`#8754F2`)/white/black (`Preferences.inkChoice`, ayarı M4'te); stroke gölgesi siyah, opacity 0.18, radius 1.5, offset (1, −1.5); yuvarlak cap/join; **yumuşatılmış path** (macOS `smoothPath`) + **1.5 pt mesafe dedup** (`extend`); kalınlık `max(3, monitörYüksekliği × 0.0055)` (`ArmView.inkWidth`), DPI ile ölçekli
   - InkLayer mimarisi per-stroke fade'ye hazır: macOS da stroke bitince bitmap'e dondurur (`freeze`); M2'de kalıcı katman per-stroke bitmap/lifetime'a genişletilir (üst üste stroke'lar bağımsız solar)
-- [ ] Ctrl basılıyken ok ucu *(başlangıçta Ctrl önerilir; onay **bekliyor**)* — ok başı `size = max(14, lineWidth × 3.2)` (macOS `addHead`)
-- [ ] Fade animasyonu (`Preferences.fadeSeconds` uyumlu): per-stroke, delay `max(0.5, fadeSeconds)`, süre **0.6 s**, easeIn; bittikten sonra stroke kaynağından çıkar (macOS `fade`)
-- [ ] Ctrl+Alt+X: mürekkebi temizle; Esc: temizle + kapat
-- **Çıkış kriteri:** el ile çizim yapmak, oka metametin, tam klavye kısayol seti.
+  - **Uygulama (13 Kasım 2026):** `Logic/InkModel.cs` — 36 yerleşik stil + laser tablosu (`PointerStyle`), `InkChoice` çözümlemesi, `InkMetrics` (kalınlık/ok/dedup), `InkFade` (easeIn cubic-bezier), `InkGeometry` (smoothPath midpoint + `addHead`). `Overlay/InkLayer.cs` — hook→`InkJournal` stroke yaşam döngüsü (Begin/Extend/End/Clear), canlı stroke monitör boyutlu bitmap'e artımlı boyanır (kare maliyeti O(yeni nokta)), stroke bitince bbox bitmap'e dondurulur ve bağımsız solar. Gölge, 18 % siyah + radius kadar genişletilmiş offset stroke geçişiyle yaklaşıklanır (1.5 pt yarıçapta blur farkı bir pikselin altında). Prototip stili `hand_black.png` = macOS "Midnight" → `.match` = `#1D1D21`; M3'ün 36 stil seti macOS varsayılanı lavender (`#8754F2`) ile gelecek.
+- [x] Ctrl basılıyken ok ucu *(başlangıçta Ctrl önerilir; onay **bekliyor**)* — ok başı `size = max(14, lineWidth × 3.2)` (macOS `addHead`) *(13 Kasım 2026; Ctrl uygulandı, kullanıcı onayı hâlâ açık — macOS ⌘)*
+- [x] Fade animasyonu (`Preferences.fadeSeconds` uyumlu): per-stroke, delay `max(0.5, fadeSeconds)`, süre **0.6 s**, easeIn; bittikten sonra stroke kaynağından çıkar (macOS `fade`) *(13 Kasım 2026; varsayılan 3 s, `TH_FADE=0` keep modu; fade sürerken kompozitör busy kadansa geçer)*
+- [x] Ctrl+Alt+X: mürekkebi temizle; Esc: temizle + kapat *(13 Kasım 2026; `RegisterHotKey` Ctrl+Alt+X, Esc hook'tan)*
+- **Çıkış kriteri (karşılandı, 13 Kasım 2026):** el ile çizim yapmak, oka metametin, tam klavye kısayol seti. Kanıt: `--inkcheck` 9/9 (çizim rengi `#1D1D21` piksel-mükemmel, Ctrl'siz ok yok / Ctrl'li ok var, fade sonrası mürekkep 0 piksel, Ctrl+Alt+X anında temizler); `--fpscheck --ink` 60,0 fps (draw 0,55 / present 0,31 ms, periyot p95 16,84 ms); birim testleri 35/35; e2e-m1 10/10; cursorcheck 7/7.
 
 ### M3 — Etkileşim kalitesi
 - [ ] Çift Shift → click-through (M1 prototipinde doğrulanan davranışın ürün kalitesine taşınması)

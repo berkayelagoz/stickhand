@@ -62,6 +62,12 @@ public sealed class OverlayController : IDisposable
     private const int IdleIntervalMs = 1000 / 20;
     private const long IdleAfterMs = 500;
     private const uint VkEscape = 0x1B;
+    private const uint VkControl = 0x11;
+    private const uint VkLeftControl = 0xA2;
+    private const uint VkRightControl = 0xA3;
+
+    // M2 ink colour: InkChoice resolved for the current style (macOS default .match).
+    private static readonly Color InkColor = InkPalette.Resolve(Preferences.InkChoice, PointerStyle.Current);
 
     private long _busyIntervalTicks = TicksFromMs(1000.0 / 120);
     private long _nextTick;
@@ -110,11 +116,13 @@ public sealed class OverlayController : IDisposable
     private int _buttonsDown; // real (non-injected) button downs - ups, hook thread only
     private bool _pendingClickThroughFlip; // WS_EX_TRANSPARENT swap deferred to the Up event
 
-    // Ink feed: hook appends segments, each monitor's InkLayer applies only the new
-    // ones into its persistent bitmap. Nothing copies point lists per frame anymore
-    // (that per-frame O(total ink) work is what made fps decay as ink grew).
+    // Ink feed: the hook appends stroke lifecycle events, each monitor's InkLayer paints
+    // only the new points into its live bitmap and freezes finished strokes for the fade.
     private readonly InkJournal _journal = new();
-    private Point? _lastInkPoint;
+    private Point _downPoint;
+    private Point _lastInkPoint;
+    private bool _strokeStarted;
+    private bool _ctrlDown;
     private int _strokeCount;
 
     // ---- overlay-thread state ----
@@ -140,6 +148,30 @@ public sealed class OverlayController : IDisposable
 
     /// <summary>Frames rendered in the last full second (composition thread).</summary>
     public int CurrentFps => _fps;
+
+    /// <summary>Live + frozen ink strokes across monitors (harness: fade verification).</summary>
+    public int InkStrokeCount
+    {
+        get
+        {
+            if (_overlays is not { } overlays) return 0;
+            int total = 0;
+            foreach (var part in overlays) total += part.Resources.Ink.StrokeCount;
+            return total;
+        }
+    }
+
+    /// <summary>Per-monitor ink state (harness diagnostics).</summary>
+    public string InkDebug
+    {
+        get
+        {
+            if (_overlays is not { } overlays) return "no overlays";
+            return string.Join(" | ", overlays.Select(part =>
+                $"{part.Monitor.Bounds.X},{part.Monitor.Bounds.Y} {part.Monitor.Bounds.Width}x{part.Monitor.Bounds.Height}: " +
+                $"strokes={part.Resources.Ink.StrokeCount} live={part.Resources.Ink.LiveActive}"));
+        }
+    }
 
     // Composition timing instrumentation (fpscheck harness).
     private long _drawTicks, _presentTicks, _frameSamples;
@@ -186,9 +218,12 @@ public sealed class OverlayController : IDisposable
                 if (ApplyCommands()) break;
 
                 bool busy = _active && _clock.ElapsedMilliseconds - Interlocked.Read(ref _lastActivityMs) < IdleAfterMs;
-                bool render = _active && (busy || _dirty);
+                // Fading strokes need frames even while the pointer is idle; run them at the
+                // busy cadence so the 0.6 s fade stays smooth.
+                bool animating = _active && InkAnimating();
+                bool render = _active && (busy || _dirty || animating);
                 long intervalTicks = _active
-                    ? (busy ? _busyIntervalTicks : _idleIntervalTicks)
+                    ? ((busy || animating) ? _busyIntervalTicks : _idleIntervalTicks)
                     : TicksFromMs(25);
 
                 if (render)
@@ -289,6 +324,10 @@ public sealed class OverlayController : IDisposable
         _doubleShift.Reset();
         _buttonsDown = 0;
         _pendingClickThroughFlip = false;
+        // Ctrl may have been released while the hook was uninstalled: start clean so the
+        // first stroke after activation cannot inherit a stale arrow head.
+        _ctrlDown = false;
+        _journal.Arrow = false;
         ClearStrokes();
         RebuildOverlays();
 
@@ -402,7 +441,7 @@ public sealed class OverlayController : IDisposable
                     Monitor = monitor,
                     Window = window,
                     Surface = surface,
-                    Resources = _scene.CreateResources(_renderer, surface.Context, monitor),
+                    Resources = _scene.CreateResources(_renderer, surface.Context, monitor, InkColor, Preferences.FadeSeconds),
                 });
             }
         }
@@ -449,6 +488,16 @@ public sealed class OverlayController : IDisposable
     {
         try { _cursorHider.HideAll(); }
         catch (Exception ex) { Debug.WriteLine($"HideAll failed: {ex.Message}"); }
+    }
+
+    /// <summary>True while any monitor's ink layer still has a stroke to fade: the compositor
+    /// must keep ticking even when the pointer is idle.</summary>
+    private bool InkAnimating()
+    {
+        if (_overlays is not { } overlays) return false;
+        foreach (var part in overlays)
+            if (part.Resources.Ink.NeedsFrame) return true;
+        return false;
     }
 
     private void TryRestoreGlobalCursor()
@@ -554,8 +603,8 @@ private void RenderFrame(bool busy)
             var mouseStats = _hooks?.MouseStats.TakeSnapshot();
             var kbdStats = _hooks?.KeyboardStats.TakeSnapshot();
             _status = busy
-                ? $"TinyHand M1.5 | mode {(_clickThrough ? "click-through" : "draw")} | {_fps} fps | mouse cb p95 {mouseStats?.P95Ms ?? 0:0.000} ms | kbd cb p95 {kbdStats?.P95Ms ?? 0:0.000} ms | strokes {Volatile.Read(ref _strokeCount)} | Ctrl+Alt+H toggle | Esc close | Ctrl+Alt+Q exit app"
-                : $"TinyHand M1.5 | mode {(_clickThrough ? "click-through" : "draw")} | {_fps} fps | Ctrl+Alt+H toggle | Esc close | Ctrl+Alt+Q exit app";
+                ? $"TinyHand M2 | mode {(_clickThrough ? "click-through" : "draw")} | {_fps} fps | mouse cb p95 {mouseStats?.P95Ms ?? 0:0.000} ms | kbd cb p95 {kbdStats?.P95Ms ?? 0:0.000} ms | strokes {Volatile.Read(ref _strokeCount)} | ink #{InkColor.R:X2}{InkColor.G:X2}{InkColor.B:X2} | Ctrl+Alt+X clear | Ctrl+Alt+H toggle | Esc close | Ctrl+Alt+Q exit app"
+                : $"TinyHand M2 | mode {(_clickThrough ? "click-through" : "draw")} | {_fps} fps | ink #{InkColor.R:X2}{InkColor.G:X2}{InkColor.B:X2} | Ctrl+Alt+X clear | Ctrl+Alt+H toggle | Esc close | Ctrl+Alt+Q exit app";
             _statusRefreshAt = now + 250;
 
             var stats = FrameStatsSnapshot();
@@ -665,7 +714,11 @@ private void RenderFrame(bool busy)
                 if (_drawing)
                 {
                     _drawing = false;
-                    _lastInkPoint = null; // stroke finished: the next down starts a fresh anchor
+                    if (_strokeStarted)
+                    {
+                        _journal.End();
+                        _strokeStarted = false;
+                    }
                     _dirty = true;
                 }
                 if (_buttonsDown == 0 && _pendingClickThroughFlip)
@@ -715,8 +768,9 @@ private void RenderFrame(bool busy)
         if (tracked)
         {
             _drawing = true;
-            _lastInkPoint = new Point((int)Interlocked.Read(ref _cursorX), (int)Interlocked.Read(ref _cursorY));
-            Interlocked.Increment(ref _strokeCount);
+            _downPoint = new Point((int)Interlocked.Read(ref _cursorX), (int)Interlocked.Read(ref _cursorY));
+            _lastInkPoint = _downPoint;
+            _strokeStarted = false;
             _dirty = true;
             return true;
         }
@@ -791,8 +845,24 @@ private void RenderFrame(bool busy)
 
     private bool OnKeyboardFilter(HookKeyEvent e)
     {
-        if (!_active || !e.KeyDown) return false;
+        if (!_active) return false;
         MarkActivity();
+
+        // Ctrl is the arrow modifier (macOS ⌘): track both edges so the head appears and
+        // disappears without waiting for the next mouse move.
+        if (e.Vk is VkControl or VkLeftControl or VkRightControl)
+        {
+            if (e.KeyDown != _ctrlDown)
+            {
+                _ctrlDown = e.KeyDown;
+                _journal.Arrow = _ctrlDown;
+                _dirty = true;
+                TraceLine($"ctrl {(_ctrlDown ? "down" : "up")}");
+            }
+            return false; // never swallow Ctrl
+        }
+
+        if (!e.KeyDown) return false;
 
         if (e.Vk == VkEscape)
         {
@@ -823,23 +893,43 @@ private void RenderFrame(bool busy)
         return button is not null;
     }
 
+    /// <summary>macOS OverlayController.drag(): the stroke starts only after 4 pt of movement
+    /// (a plain click leaves no ink), then every point at least 1.5 pt away is appended.</summary>
     private void AppendStroke(int x, int y)
     {
         var to = new Point(x, y);
-        if (_lastInkPoint is { } from)
-            _journal.AddSegment(from, to);
+        int scale = PrimaryScale();
+        if (!_strokeStarted)
+        {
+            if (InkGeometry.Distance(_downPoint, to) < 4 * scale) return;
+            _journal.Begin(_downPoint);
+            _strokeStarted = true;
+            _lastInkPoint = _downPoint;
+            Interlocked.Increment(ref _strokeCount);
+        }
+        if (!InkMetrics.ShouldAppend(_lastInkPoint, to, scale)) return;
+        _journal.Extend(to);
         _lastInkPoint = to;
         _dirty = true;
+    }
+
+    private int PrimaryScale()
+    {
+        var primary = _primaryMonitor;
+        return primary is null ? 1 : Math.Max(1, (int)Math.Round(primary.DpiX / 96.0, MidpointRounding.AwayFromZero));
     }
 
     private void ClearStrokes()
     {
         _journal.Clear();
-        _lastInkPoint = null;
+        _strokeStarted = false;
         _drawing = false;
         Interlocked.Exchange(ref _strokeCount, 0);
         _dirty = true;
     }
+
+    /// <summary>Ctrl+Alt+X: wipe all ink without leaving drawing mode (macOS clear shortcut).</summary>
+    public void ClearInk() => ClearStrokes();
 
     private void MarkActivity() => Interlocked.Exchange(ref _lastActivityMs, _clock.ElapsedMilliseconds);
 
