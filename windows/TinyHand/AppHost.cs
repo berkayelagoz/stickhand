@@ -37,6 +37,8 @@ internal sealed class AppHost : ApplicationContext
             Debug.WriteLine($"RegisterHotKey quit failed: {Marshal.GetLastWin32Error()}");
         if (!_hotkeys.RegisterClear())
             Debug.WriteLine($"RegisterHotKey clear failed: {Marshal.GetLastWin32Error()}");
+        if (!_hotkeys.RegisterFade())
+            Debug.WriteLine($"RegisterHotKey fade failed: {Marshal.GetLastWin32Error()}");
 
         _toggleItem = new ToolStripMenuItem("Active (Ctrl+Alt+H)") { Checked = false, CheckOnClick = true };
         _toggleItem.Click += (_, _) => Toggle();
@@ -82,6 +84,10 @@ internal sealed class AppHost : ApplicationContext
             case HotkeyHost.ClearId:
                 // macOS ⌃⌥X: wipe the ink, stay in drawing mode.
                 _controller.ClearInk();
+                break;
+            case HotkeyHost.FadeId:
+                // Toggle the per-stroke auto-fade; off keeps the ink on screen.
+                _controller.ToggleFade();
                 break;
         }
     }

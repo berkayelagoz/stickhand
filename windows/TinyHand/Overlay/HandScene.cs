@@ -257,7 +257,7 @@ public sealed class HandScene
     }
 
     public SceneResources CreateResources(OverlayRenderer renderer, ID2D1DeviceContext context, MonitorInfo monitor,
-        Color inkColor, double fadeSeconds)
+        Color inkColor)
     {
         int scale = Math.Max(1, (int)Math.Round(monitor.DpiX / 96.0, MidpointRounding.AwayFromZero));
         var roundStroke = renderer.D2dFactory.CreateStrokeStyle(new StrokeStyleProperties
@@ -276,7 +276,7 @@ public sealed class HandScene
         {
             Context = context,
             RoundStroke = roundStroke,
-            Ink = new InkLayer(renderer, monitor, scale, inkColor, fadeSeconds),
+            Ink = new InkLayer(renderer, monitor, scale, inkColor),
             ToolbarBg = brush(28 / 255f, 28 / 255f, 32 / 255f, 245 / 255f),
             ToolbarBorder = brush(1, 1, 1, 1),
             ToolbarText = brush(1, 1, 1, 1),

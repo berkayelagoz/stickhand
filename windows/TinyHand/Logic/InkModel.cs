@@ -259,14 +259,22 @@ public static class InkGeometry
 
 /// <summary>
 /// M2 preference values. The settings window and persistence are M4; until then the macOS
-/// defaults apply and <c>TH_FADE</c> overrides the fade for diagnostics (<c>TH_FADE=0</c>
-/// keeps ink forever, like <c>Preferences.fadeSeconds ≤ 0</c>).
+/// defaults apply, <c>TH_FADE</c> overrides the initial fade for diagnostics
+/// (<c>TH_FADE=0</c> keeps ink forever, like <c>Preferences.fadeSeconds ≤ 0</c>) and
+/// Ctrl+Alt+F toggles the fade at runtime.
 /// </summary>
 public static class Preferences
 {
     public const double DefaultFadeSeconds = 3;
 
-    public static double FadeSeconds { get; } = ReadFadeSeconds();
+    private static double _fadeSeconds = ReadFadeSeconds();
+
+    /// <summary>Auto-fade delay in seconds; 0 keeps ink forever (macOS <c>fadeSeconds ≤ 0</c>).</summary>
+    public static double FadeSeconds
+    {
+        get => Volatile.Read(ref _fadeSeconds);
+        set => Volatile.Write(ref _fadeSeconds, value);
+    }
 
     public static InkChoice InkChoice { get; } = InkChoice.Match;
 

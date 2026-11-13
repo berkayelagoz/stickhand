@@ -54,6 +54,9 @@ public static class Win32
     public const uint WS_EX_TRANSPARENT = 0x00000020;
     public const uint WS_EX_NOACTIVATE = 0x08000000;
     public const uint WS_EX_TOPMOST = 0x00000008;
+
+    /// <summary>SetWindowPos insert-after value: top of the topmost band.</summary>
+    public static readonly IntPtr HWND_TOPMOST = new(-1);
     public const uint WS_EX_TOOLWINDOW = 0x00000080;
 
     public const uint ULW_ALPHA = 0x02;

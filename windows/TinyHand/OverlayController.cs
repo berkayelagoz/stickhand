@@ -441,7 +441,7 @@ public sealed class OverlayController : IDisposable
                     Monitor = monitor,
                     Window = window,
                     Surface = surface,
-                    Resources = _scene.CreateResources(_renderer, surface.Context, monitor, InkColor, Preferences.FadeSeconds),
+                    Resources = _scene.CreateResources(_renderer, surface.Context, monitor, InkColor),
                 });
             }
         }
@@ -602,9 +602,10 @@ private void RenderFrame(bool busy)
         {
             var mouseStats = _hooks?.MouseStats.TakeSnapshot();
             var kbdStats = _hooks?.KeyboardStats.TakeSnapshot();
+            string fade = Preferences.FadeSeconds > 0 ? $"fade {Preferences.FadeSeconds:0.#}s" : "fade off";
             _status = busy
-                ? $"TinyHand M2 | mode {(_clickThrough ? "click-through" : "draw")} | {_fps} fps | mouse cb p95 {mouseStats?.P95Ms ?? 0:0.000} ms | kbd cb p95 {kbdStats?.P95Ms ?? 0:0.000} ms | strokes {Volatile.Read(ref _strokeCount)} | ink #{InkColor.R:X2}{InkColor.G:X2}{InkColor.B:X2} | Ctrl+Alt+X clear | Ctrl+Alt+H toggle | Esc close | Ctrl+Alt+Q exit app"
-                : $"TinyHand M2 | mode {(_clickThrough ? "click-through" : "draw")} | {_fps} fps | ink #{InkColor.R:X2}{InkColor.G:X2}{InkColor.B:X2} | Ctrl+Alt+X clear | Ctrl+Alt+H toggle | Esc close | Ctrl+Alt+Q exit app";
+                ? $"TinyHand M2 | mode {(_clickThrough ? "click-through" : "draw")} | {_fps} fps | mouse cb p95 {mouseStats?.P95Ms ?? 0:0.000} ms | kbd cb p95 {kbdStats?.P95Ms ?? 0:0.000} ms | strokes {Volatile.Read(ref _strokeCount)} | ink #{InkColor.R:X2}{InkColor.G:X2}{InkColor.B:X2} | {fade} | Ctrl+Alt+X clear | Ctrl+Alt+F fade | Ctrl+Alt+H toggle | Esc close | Ctrl+Alt+Q exit app"
+                : $"TinyHand M2 | mode {(_clickThrough ? "click-through" : "draw")} | {_fps} fps | ink #{InkColor.R:X2}{InkColor.G:X2}{InkColor.B:X2} | {fade} | Ctrl+Alt+X clear | Ctrl+Alt+F fade | Ctrl+Alt+H toggle | Esc close | Ctrl+Alt+Q exit app";
             _statusRefreshAt = now + 250;
 
             var stats = FrameStatsSnapshot();
@@ -930,6 +931,15 @@ private void RenderFrame(bool busy)
 
     /// <summary>Ctrl+Alt+X: wipe all ink without leaving drawing mode (macOS clear shortcut).</summary>
     public void ClearInk() => ClearStrokes();
+
+    /// <summary>Ctrl+Alt+F: toggle the per-stroke auto-fade (macOS <c>fadeSeconds ≤ 0</c> keeps
+    /// ink forever). Layers read <see cref="Preferences.FadeSeconds"/> every frame, so the
+    /// change applies immediately — including to strokes that are already fading.</summary>
+    public void ToggleFade()
+    {
+        Preferences.FadeSeconds = Preferences.FadeSeconds > 0 ? 0 : Preferences.DefaultFadeSeconds;
+        _dirty = true;
+    }
 
     private void MarkActivity() => Interlocked.Exchange(ref _lastActivityMs, _clock.ElapsedMilliseconds);
 

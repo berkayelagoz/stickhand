@@ -19,6 +19,7 @@ internal static class InkCheck
     private const byte VkControl = 0x11;
     private const byte VkMenu = 0x12;
     private const byte VkX = 0x58;
+    private const byte VkF = 0x46;
 
     private static int _failures;
 
@@ -37,7 +38,9 @@ internal static class InkCheck
         Console.WriteLine($"inkcheck: display={mode?.width}x{mode?.height} @ {mode?.hz} Hz, dpi scale {scale}, " +
             $"fade {fade}s, ink #{ink.R:X2}{ink.G:X2}{ink.B:X2} ({PointerStyle.Current.Id})");
 
-        // White backdrop: ink pixels are unambiguous against it.
+        // White backdrop: ink pixels are unambiguous against it. TopMost keeps it above a
+        // terminal that may itself be always-on-top; the overlay windows are created later
+        // and stay above the backdrop in the topmost band.
         using var backdrop = new Form
         {
             FormBorderStyle = FormBorderStyle.None,
@@ -45,9 +48,14 @@ internal static class InkCheck
             Bounds = new Rectangle(cx - 520, cy - 260, 1040, 700),
             BackColor = Color.White,
             ShowInTaskbar = false,
+            TopMost = true,
         };
         backdrop.Show();
         backdrop.BringToFront();
+        // A terminal that is itself always-on-top can sit above a merely TopMost form;
+        // re-assert the topmost band explicitly.
+        User32.SetWindowPos(backdrop.Handle, Win32.HWND_TOPMOST, 0, 0, 0, 0,
+            Win32.SWP_NOMOVE | Win32.SWP_NOSIZE | Win32.SWP_NOACTIVATE);
         Pump(300);
 
         using var controller = new OverlayController();
@@ -55,9 +63,12 @@ internal static class InkCheck
         hotkeys.HotkeyPressed += id =>
         {
             if (id == HotkeyHost.ClearId) controller.ClearInk();
+            if (id == HotkeyHost.FadeId) controller.ToggleFade();
         };
         if (!hotkeys.RegisterClear())
             Console.WriteLine("  WARN: RegisterHotKey Ctrl+Alt+X failed");
+        if (!hotkeys.RegisterFade())
+            Console.WriteLine("  WARN: RegisterHotKey Ctrl+Alt+F failed");
         controller.SetActive(true);
         Pump(1500);
 
@@ -72,7 +83,7 @@ internal static class InkCheck
         Check("stroke counted", controller.InkStrokeCount == 1,
             $"strokes={controller.InkStrokeCount} [{controller.InkDebug}]");
         if (Environment.GetEnvironmentVariable("TH_INKCHECK_DEBUG") == "1")
-            DumpRows(cx - 300, cy - 20, 200, 40);
+            DumpRows(cx - 300, cy - 20, 200, 40, "body");
 
         // 2. Arrow head: only while Ctrl is held (macOS ⌘).
         Drag(cx - 300, cy + 200, cx + 100, cy + 200, steps: 20);
@@ -95,7 +106,7 @@ internal static class InkCheck
         var headBar = Capture(cx + 64, cy + 292, 7, 2);
         Check("head is open (no bar)", headBar.Dark <= 2, $"dark={headBar.Dark}");
         if (Environment.GetEnvironmentVariable("TH_INKCHECK_DEBUG") == "1")
-            DumpRows(cx + 55, cy + 275, 55, 50);
+            DumpRows(cx + 55, cy + 275, 55, 50, "head");
 
         // 3. Hand tip: the measured fingertip must sit on the real cursor (the sprite used to
         // be anchored by its top-centre, leaving the tip ~6 px left / ~14 px below).
@@ -105,7 +116,26 @@ internal static class InkCheck
         Check("hand tip on cursor", Math.Abs(tip.TopRow - 20) <= 3 && Math.Abs(tip.TopCenterX - 40) <= 4,
             $"topRow={tip.TopRow} (want 20) topCenterX={tip.TopCenterX} (want 40)");
 
-        // 4. Per-stroke fade: delay max(0.5, fadeSeconds) + 0.6 s, then the stroke is gone.
+        // 4. Live stroke: the blit region must include the stroke extent. It used to be the
+        // centreline bounds, so the outer half of the stroke was clipped until the stroke
+        // froze ("missing parts appear after the drawing ends").
+        MoveTo(cx - 300, cy + 400);
+        Pump(60);
+        Mouse(Win32Input.MOUSEEVENTF_LEFTDOWN);
+        Pump(40);
+        for (int i = 1; i <= 10; i++)
+        {
+            MoveTo(cx - 300 + 20 * i, cy + 400);
+            Pump(12);
+        }
+        Pump(200);
+        var live = Capture(cx - 300, cy + 380, 200, 40);
+        Check("live stroke painted", live.Dark > 500, $"dark={live.Dark}");
+        Check("live stroke full width", live.Dark is >= 200 * 11 and <= 200 * 13, $"dark={live.Dark}");
+        Mouse(Win32Input.MOUSEEVENTF_LEFTUP);
+        Pump(100);
+
+        // 5. Per-stroke fade: delay max(0.5, fadeSeconds) + 0.6 s, then the stroke is gone.
         if (InkFade.Keep(fade))
         {
             Pump(1500);
@@ -120,12 +150,35 @@ internal static class InkCheck
             Check("faded strokes dropped", controller.InkStrokeCount == 0, $"strokes={controller.InkStrokeCount}");
         }
 
-        // 4. Ctrl+Alt+X clears the remaining ink immediately.
+        // 6. Ctrl+Alt+X clears the remaining ink immediately.
         InjectClearHotkey();
         Pump(400);
         var cleared = Capture(cx - 300, cy + 280, 200, 40);
         Check("Ctrl+Alt+X clears", cleared.Dark == 0, $"dark={cleared.Dark}");
         Check("clear drops strokes", controller.InkStrokeCount == 0, $"strokes={controller.InkStrokeCount}");
+
+        // 7. Ctrl+Alt+F toggles the auto-fade at runtime: off keeps the ink, on fades it.
+        if (Preferences.FadeSeconds <= 0)
+        {
+            InjectFadeHotkey();
+            Pump(200);
+        }
+        Check("fade on before toggle", Preferences.FadeSeconds > 0, $"fade={Preferences.FadeSeconds}");
+        InjectFadeHotkey();
+        Pump(200);
+        Check("fade toggled off", Preferences.FadeSeconds <= 0, $"fade={Preferences.FadeSeconds}");
+        Drag(cx - 300, cy + 100, cx + 100, cy + 100, steps: 20);
+        MoveTo(cx, cy + 420);
+        Pump(300);
+        Pump(4600);
+        var keptStroke = Capture(cx - 300, cy + 80, 200, 40);
+        Check("ink kept with fade off", keptStroke.Dark > 500, $"dark={keptStroke.Dark}");
+        InjectFadeHotkey();
+        Pump(200);
+        Check("fade toggled on", Preferences.FadeSeconds > 0, $"fade={Preferences.FadeSeconds}");
+        Pump(4600);
+        var fadedStroke = Capture(cx - 300, cy + 80, 200, 40);
+        Check("ink fades after toggle", fadedStroke.Dark == 0, $"dark={fadedStroke.Dark}");
 
         controller.SetActive(false);
         Pump(300);
@@ -184,11 +237,11 @@ internal static class InkCheck
     }
 
     /// <summary>Debug: dark pixels per row of a capture (TH_INKCHECK_DEBUG=1).</summary>
-    private static void DumpRows(int x, int y, int width, int height)
+    private static void DumpRows(int x, int y, int width, int height, string name = "inkcheck")
     {
         using var bitmap = new Bitmap(width, height);
         using (var g = Graphics.FromImage(bitmap)) g.CopyFromScreen(x, y, 0, 0, new Size(width, height));
-        string path = Path.Combine(Path.GetTempPath(), "tinyhand-inkcheck.png");
+        string path = Path.Combine(Path.GetTempPath(), $"tinyhand-{name}.png");
         bitmap.Save(path, System.Drawing.Imaging.ImageFormat.Png);
         Console.WriteLine($"    capture saved: {path}");
         for (int py = 0; py < height; py++)
@@ -271,6 +324,16 @@ internal static class InkCheck
         Key(VkMenu, true);
         Key(VkX, true);
         Key(VkX, false);
+        Key(VkMenu, false);
+        Key(VkControl, false);
+    }
+
+    private static void InjectFadeHotkey()
+    {
+        Key(VkControl, true);
+        Key(VkMenu, true);
+        Key(VkF, true);
+        Key(VkF, false);
         Key(VkMenu, false);
         Key(VkControl, false);
     }

@@ -19,6 +19,9 @@ internal sealed class HotkeyHost : NativeWindow, IDisposable
     public const int ClearId = 3;
     public const uint ClearVk = 0x58; // 'X' — clear ink (macOS ⌃⌥X)
 
+    public const int FadeId = 4;
+    public const uint FadeVk = 0x46; // 'F' — toggle the ink auto-fade
+
     public event Action<int>? HotkeyPressed;
 
     public HotkeyHost()
@@ -35,11 +38,15 @@ internal sealed class HotkeyHost : NativeWindow, IDisposable
     public bool RegisterClear() =>
         User32.RegisterHotKey(Handle, ClearId, ToggleModifiers | Win32.MOD_NOREPEAT, ClearVk);
 
+    public bool RegisterFade() =>
+        User32.RegisterHotKey(Handle, FadeId, ToggleModifiers | Win32.MOD_NOREPEAT, FadeVk);
+
     public void Dispose()
     {
         User32.UnregisterHotKey(Handle, ToggleId);
         User32.UnregisterHotKey(Handle, QuitId);
         User32.UnregisterHotKey(Handle, ClearId);
+        User32.UnregisterHotKey(Handle, FadeId);
         DestroyHandle();
     }
 

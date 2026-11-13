@@ -125,6 +125,7 @@ public sealed class InkLayer : IDisposable
 
     private readonly ID2D1DeviceContext _ctx;
     private readonly ID2D1Bitmap1 _live;
+    private readonly ID2D1Bitmap1 _liveShadow;
     private readonly ID2D1SolidColorBrush _brush;
     private readonly ID2D1SolidColorBrush _shadowBrush;
     private readonly ID2D1StrokeStyle _style;
@@ -137,16 +138,16 @@ public sealed class InkLayer : IDisposable
     private readonly float _shadowWidth;
     private readonly float _shadowDx, _shadowDy;
     private readonly int _scale;
-    private readonly double _fadeSeconds;
+    private readonly int _blitPad;
 
     private int _generation = -1; // first sync aligns to the journal's current generation (empty replay)
     private int _index;
     private bool _liveActive;
     private bool _arrow;
-    private Rectangle _liveBounds; // screen coords of the ink painted into the live bitmap
+    private Rectangle _liveBounds; // screen coords of the stroke centreline painted into the live bitmap
     private volatile int _strokeCount;
 
-    public InkLayer(OverlayRenderer renderer, MonitorInfo monitor, int scale, Color inkColor, double fadeSeconds)
+    public InkLayer(OverlayRenderer renderer, MonitorInfo monitor, int scale, Color inkColor)
     {
         // Own context: ink can be painted while the frame context targets the back buffer.
         _ctx = renderer.D2dDevice.CreateDeviceContext(DeviceContextOptions.None);
@@ -154,23 +155,16 @@ public sealed class InkLayer : IDisposable
         _factory = renderer.D2dFactory;
         _monitorBounds = monitor.Bounds;
         _scale = scale;
-        _fadeSeconds = fadeSeconds;
 
-        _live = _ctx.CreateBitmap(
-            new SizeI(monitor.Bounds.Width, monitor.Bounds.Height),
-            IntPtr.Zero, 0,
-            new BitmapProperties1
-            {
-                PixelFormat = new PixelFormat(Format.B8G8R8A8_UNorm, D2dAlphaMode.Premultiplied),
-                DpiX = 96,
-                DpiY = 96,
-                BitmapOptions = BitmapOptions.Target,
-            });
+        _live = CreateTarget(monitor);
+        _liveShadow = CreateTarget(monitor);
         _ctx.Target = _live;
         ClearLive(); // CreateBitmap leaves content undefined
 
         _brush = _ctx.CreateSolidColorBrush(new Color4(inkColor.R / 255f, inkColor.G / 255f, inkColor.B / 255f, 1));
-        _shadowBrush = _ctx.CreateSolidColorBrush(new Color4(0, 0, 0, 0.18f));
+        // Opaque black: the 18 % opacity is applied once when the shadow layer is composited,
+        // so overlapping batches cannot darken each other (the round-blob artifact).
+        _shadowBrush = _ctx.CreateSolidColorBrush(new Color4(0, 0, 0, 1));
         _style = renderer.D2dFactory.CreateStrokeStyle(new StrokeStyleProperties
         {
             StartCap = CapStyle.Round,
@@ -190,7 +184,22 @@ public sealed class InkLayer : IDisposable
         // macOS shadowOffset (1, −1.5) is y-up (down-right); Direct2D y grows downwards.
         _shadowDx = 1f * scale;
         _shadowDy = 1.5f * scale;
+        // Stroke + shadow extent around the centreline: the live blit and the freeze bbox
+        // must both include it, otherwise the stroke edges are clipped while drawing.
+        _blitPad = (int)Math.Ceiling(_width / 2 + shadowRadius * 3
+            + Math.Max(Math.Abs(_shadowDx), Math.Abs(_shadowDy)) + 2);
     }
+
+    private ID2D1Bitmap1 CreateTarget(MonitorInfo monitor) => _ctx.CreateBitmap(
+        new SizeI(monitor.Bounds.Width, monitor.Bounds.Height),
+        IntPtr.Zero, 0,
+        new BitmapProperties1
+        {
+            PixelFormat = new PixelFormat(Format.B8G8R8A8_UNorm, D2dAlphaMode.Premultiplied),
+            DpiX = 96,
+            DpiY = 96,
+            BitmapOptions = BitmapOptions.Target,
+        });
 
     /// <summary>True when the layer holds live or fading ink (skips the blits otherwise).</summary>
     public bool HasInk => _liveActive || _strokes.Count > 0;
@@ -207,11 +216,12 @@ public sealed class InkLayer : IDisposable
     {
         get
         {
-            if (InkFade.Keep(_fadeSeconds)) return false;
+            double fadeSeconds = Preferences.FadeSeconds;
+            if (InkFade.Keep(fadeSeconds)) return false;
             double now = NowSeconds();
             // + margin: one more frame must run after the fade completes so the stroke is
             // actually removed (the last visible frame still has opacity > 0).
-            double window = InkFade.DelaySeconds(_fadeSeconds) + InkFade.DurationSeconds + 0.25;
+            double window = InkFade.DelaySeconds(fadeSeconds) + InkFade.DurationSeconds + 0.25;
             foreach (var stroke in _strokes)
                 if (now - ToSeconds(stroke.EndTimestamp) < window)
                     return true;
@@ -264,11 +274,12 @@ public sealed class InkLayer : IDisposable
     public void Draw(ID2D1DeviceContext ctx, MonitorInfo monitor)
     {
         double now = NowSeconds();
+        double fadeSeconds = Preferences.FadeSeconds;
 
         for (int i = _strokes.Count - 1; i >= 0; i--)
         {
             var stroke = _strokes[i];
-            float opacity = InkFade.Opacity(now - ToSeconds(stroke.EndTimestamp), _fadeSeconds);
+            float opacity = InkFade.Opacity(now - ToSeconds(stroke.EndTimestamp), fadeSeconds);
             if (opacity <= 0)
             {
                 stroke.Bitmap.Dispose();
@@ -284,9 +295,16 @@ public sealed class InkLayer : IDisposable
 
         if (_liveActive && _liveBounds.Width > 0)
         {
+            // Blit the stroke + shadow extent, not just the centreline bounds: the outer half
+            // of the stroke used to be clipped until the stroke froze (the "missing parts
+            // appear after the drawing ends" report).
+            var blit = Rectangle.Inflate(_liveBounds, _blitPad, _blitPad);
+            blit.Intersect(_monitorBounds);
             var local = new Rect(
-                _liveBounds.X - monitor.Bounds.X, _liveBounds.Y - monitor.Bounds.Y,
-                _liveBounds.Width, _liveBounds.Height);
+                blit.X - monitor.Bounds.X, blit.Y - monitor.Bounds.Y, blit.Width, blit.Height);
+            // Shadow layer first, at 18 %: a single composite, so overlapping batches never
+            // accumulate into darker round blobs along the stroke.
+            ctx.DrawBitmap(_liveShadow, local, 0.18f, BitmapInterpolationMode.NearestNeighbor, local);
             ctx.DrawBitmap(_live, local, 1f, BitmapInterpolationMode.NearestNeighbor, local);
             if (_arrow) DrawHead(ctx);
         }
@@ -392,10 +410,17 @@ public sealed class InkLayer : IDisposable
 
     private void Paint(ID2D1Geometry geometry)
     {
+        // Shadow layer: opaque black, offset. It is composited once at 18 % under the ink,
+        // so overlapping batches cannot accumulate alpha (the round-blob artifact).
+        _ctx.Target = _liveShadow;
         _ctx.BeginDraw();
         _ctx.Transform = Matrix3x2.CreateTranslation(_shadowDx, _shadowDy);
         _ctx.DrawGeometry(geometry, _shadowBrush, _shadowWidth, _style);
         _ctx.Transform = Matrix3x2.Identity;
+        _ctx.EndDraw();
+
+        _ctx.Target = _live;
+        _ctx.BeginDraw();
         _ctx.DrawGeometry(geometry, _brush, _width, _style);
         _ctx.EndDraw();
     }
@@ -411,9 +436,7 @@ public sealed class InkLayer : IDisposable
         }
 
         // macOS Ink.freeze pad: lineWidth/2 + shadowRadius × 3 + max(|offset|) + 2.
-        int pad = (int)Math.Ceiling(_width / 2 + 1.5 * _scale * 3
-            + Math.Max(Math.Abs(_shadowDx), Math.Abs(_shadowDy)) + 2);
-        var bbox = Rectangle.Inflate(_liveBounds, pad, pad);
+        var bbox = Rectangle.Inflate(_liveBounds, _blitPad, _blitPad);
         bbox.Intersect(_monitorBounds);
         if (bbox.Width <= 0 || bbox.Height <= 0)
         {
@@ -433,8 +456,10 @@ public sealed class InkLayer : IDisposable
         _ctx.BeginDraw();
         _ctx.Clear(new Color4(0, 0, 0, 0));
         var src = new Rect(bbox.X - _monitorBounds.X, bbox.Y - _monitorBounds.Y, bbox.Width, bbox.Height);
-        _ctx.DrawBitmap(_live, new Rect(0, 0, bbox.Width, bbox.Height), 1f,
-            BitmapInterpolationMode.NearestNeighbor, src);
+        var dest = new Rect(0, 0, bbox.Width, bbox.Height);
+        // Bake the shadow under the ink once, so the frozen stroke fades as one image.
+        _ctx.DrawBitmap(_liveShadow, dest, 0.18f, BitmapInterpolationMode.NearestNeighbor, src);
+        _ctx.DrawBitmap(_live, dest, 1f, BitmapInterpolationMode.NearestNeighbor, src);
         _ctx.EndDraw();
         _ctx.Target = _live;
 
@@ -462,9 +487,17 @@ public sealed class InkLayer : IDisposable
 
     private void ClearLive()
     {
+        _ctx.Target = _live;
         _ctx.BeginDraw();
         _ctx.Clear(new Color4(0, 0, 0, 0));
         _ctx.EndDraw();
+
+        _ctx.Target = _liveShadow;
+        _ctx.BeginDraw();
+        _ctx.Clear(new Color4(0, 0, 0, 0));
+        _ctx.EndDraw();
+
+        _ctx.Target = _live;
         _liveBounds = Rectangle.Empty;
     }
 
@@ -506,6 +539,7 @@ public sealed class InkLayer : IDisposable
         _shadowBrush.Dispose();
         _style.Dispose();
         _live.Dispose();
+        _liveShadow.Dispose();
         _ctx.Dispose();
     }
 }
