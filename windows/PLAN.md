@@ -146,8 +146,10 @@ Karar gereği M2'den önce uygulanır; gerekçe spike bölümündeki sonuç notu
 
 ### M2 — Çizim
 - [ ] Sürükle → mürekkep çizimi (Direct2D; M1.5 sonrası), renk/kalınluk ölçeği
-- [ ] Ctrl basılıyken ok ucu
-- [ ] Fade animasyonu (`Preferences.fadeSeconds` uyumlu)
+  - Görsel sözleşme (macOS `Ink.swift` ile birebir — 13 Kasım 2026 kaynak taraması): renk **mor** `sRGB(0.53, 0.33, 0.95)`; stroke gölgesi siyah, opacity 0.18, radius 1.5, offset (1, −1.5); yuvarlak cap/join; **yumuşatılmış path** (macOS `smoothPath`) + **1.5 pt mesafe dedup** (`extend`); kalınlık `max(3, monitörYüksekliği × 0.0055)` (`ArmView.inkWidth`), DPI ile ölçekli
+  - InkLayer mimarisi per-stroke fade'ye hazır: macOS da stroke bitince bitmap'e dondurur (`freeze`); M2'de kalıcı katman per-stroke bitmap/lifetime'a genişletilir (üst üste stroke'lar bağımsız solar)
+- [ ] Ctrl basılıyken ok ucu *(başlangıçta Ctrl önerilir; onay **bekliyor**)* — ok başı `size = max(14, lineWidth × 3.2)` (macOS `addHead`)
+- [ ] Fade animasyonu (`Preferences.fadeSeconds` uyumlu): per-stroke, delay `max(0.5, fadeSeconds)`, süre **0.6 s**, easeIn; bittikten sonra stroke kaynağından çıkar (macOS `fade`)
 - [ ] Ctrl+Alt+X: mürekkebi temizle; Esc: temizle + kapat
 - **Çıkış kriteri:** el ile çizim yapmak, oka metametin, tam klavye kısayol seti.
 
@@ -155,6 +157,8 @@ Karar gereği M2'den önce uygulanır; gerekçe spike bölümündeki sonuç notu
 - [ ] Çift Shift → click-through (M1 prototipinde doğrulanan davranışın ürün kalitesine taşınması)
 - [ ] Basılı interact tuşu → geçici click-through (macOS `interactKey`, varsayılan ⌥ ↔ Alt); `interactKeepsHand` davranışı: tuş basılıyken el kalır ya da gerçek imleç görünür
 - [ ] Toolbar: 36 stil + lazer + ses düğmesi + çıkış; hit-test / `passThroughRects` mantığı
+  - Görsel sözleşme (macOS `Toolbar.swift`): darkGlass vibrancy panel'in Windows karşılığı: yarı saydam koyu arka plan + 16 px köşe radiusu, panel 300×56, yatay stack spacing 6; acrylic/blur gerekliliği ölçülerek karar verilir (GDI+ benzeri elle boyanmış gradient de bir seçenek)
+- [ ] **El görsel eşliği** (macOS `ArmView`): basınç/kalkma ile dinamik gölge (opacity `0.26 + 0.02 × press`, radius `lift × 0.35 + 5 × press`, offset lift'e göre), parmak ucunda kırmızı parlayan mürekkep noktası (`dotLayer`, shadow radius `r × (2.2 + press)`), stil başına `tip/tipX` pin; bunlar statik sprite'tan davranışsal sprite'a geçiş gerektirir (M1'de tek stil + tek sprite vardı)
 - [ ] `TapSound` (NAudio), ses aç/kapa
 - [ ] Busy 120 Hz / idle 20 Hz fps yönetimi (OverlayController mantığı)
 - **Çıkış kriteri:** macOS kullanım tablosundaki her davranış el ile yapılabilir, akıcı.
