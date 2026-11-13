@@ -91,6 +91,11 @@ public sealed class OverlayController : IDisposable
     private long _lastFrameTs;
     private string _fpsHud = "";
 
+    // Transient on-screen feedback for hotkey changes (smoothing level, fade, clear).
+    private const long ToastMs = 1500;
+    private string _toast = "";
+    private long _toastUntilMs;
+
     /// <summary>Recent per-frame composition statistics (fpscheck + HUD source).</summary>
     public sealed record FrameStats(
         double PeriodP95Ms, double PeriodMaxMs,
@@ -222,9 +227,12 @@ public sealed class OverlayController : IDisposable
                 // Fading strokes need frames even while the pointer is idle; run them at the
                 // busy cadence so the 0.6 s fade stays smooth.
                 bool animating = _active && InkAnimating();
-                bool render = _active && (busy || _dirty || animating);
+                // The toast must disappear on its own: keep rendering until one frame after
+                // its deadline, otherwise the last visible frame would leave it on screen.
+                bool toast = _active && _clock.ElapsedMilliseconds < Interlocked.Read(ref _toastUntilMs) + 100;
+                bool render = _active && (busy || _dirty || animating || toast);
                 long intervalTicks = _active
-                    ? ((busy || animating) ? _busyIntervalTicks : _idleIntervalTicks)
+                    ? ((busy || animating || toast) ? _busyIntervalTicks : _idleIntervalTicks)
                     : TicksFromMs(25);
 
                 if (render)
@@ -673,7 +681,8 @@ private void RenderFrame(bool busy)
             IsPrimary: _primaryMonitor?.IsPrimary ?? false,
             DpiX: (int)(_primaryMonitor?.DpiX ?? 96),
             Status: _status,
-            FpsHud: _fpsHud);
+            FpsHud: _fpsHud,
+            Toast: _clock.ElapsedMilliseconds < Interlocked.Read(ref _toastUntilMs) ? _toast : "");
     }
 
     // =====================================================================
@@ -942,7 +951,19 @@ private void RenderFrame(bool busy)
     }
 
     /// <summary>Ctrl+Alt+X: wipe all ink without leaving drawing mode (macOS clear shortcut).</summary>
-    public void ClearInk() => ClearStrokes();
+    public void ClearInk()
+    {
+        ClearStrokes();
+        ShowToast("Ink cleared");
+    }
+
+    /// <summary>Transient on-screen feedback for hotkey changes.</summary>
+    private void ShowToast(string text)
+    {
+        _toast = text;
+        Interlocked.Exchange(ref _toastUntilMs, _clock.ElapsedMilliseconds + ToastMs);
+        _dirty = true;
+    }
 
     /// <summary>Ctrl+Alt+F: toggle the per-stroke auto-fade (macOS <c>fadeSeconds ≤ 0</c> keeps
     /// ink forever). Layers read <see cref="Preferences.FadeSeconds"/> every frame, so the
@@ -950,6 +971,7 @@ private void RenderFrame(bool busy)
     public void ToggleFade()
     {
         Preferences.FadeSeconds = Preferences.FadeSeconds > 0 ? 0 : Preferences.DefaultFadeSeconds;
+        ShowToast(Preferences.FadeSeconds > 0 ? $"Fade: {Preferences.FadeSeconds:0.#} s" : "Fade: off");
         _dirty = true;
     }
 
@@ -957,6 +979,7 @@ private void RenderFrame(bool busy)
     public void ToggleSmoothing()
     {
         Preferences.SmoothingLevel = SmoothingPresets.Next(Preferences.SmoothingLevel);
+        ShowToast($"Smoothing: {SmoothingPresets.Title(Preferences.SmoothingLevel)}");
         _dirty = true;
     }
 

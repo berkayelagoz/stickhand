@@ -190,6 +190,8 @@ internal static class InkCheck
         Pump(200);
         Check("Ctrl+Alt+S cycles smoothing", Preferences.SmoothingLevel != smoothBefore,
             $"{SmoothingPresets.Title(smoothBefore)} -> {SmoothingPresets.Title(Preferences.SmoothingLevel)}");
+        var toast = Capture(cx - 230, 92, 460, 56);
+        Check("smoothing toast visible", toast.Dark > 1000, $"dark={toast.Dark}");
 
         controller.SetActive(false);
         Pump(300);

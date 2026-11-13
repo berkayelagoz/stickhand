@@ -28,9 +28,10 @@ public sealed record SceneSnapshot(
     bool IsPrimary,
     int DpiX,
     string Status,
-    string FpsHud)
+    string FpsHud,
+    string Toast)
 {
-    public static SceneSnapshot Empty { get; } = new(new Point(), [], false, 96, "", "");
+    public static SceneSnapshot Empty { get; } = new(new Point(), [], false, 96, "", "", "");
 }
 
 /// <summary>
@@ -65,7 +66,7 @@ public sealed class HandScene
     private static readonly Lazy<IDWriteFactory> Write = new(
         () => DWriteApi.DWriteCreateFactory<IDWriteFactory>(DWriteFactoryType.Shared));
 
-    private enum TextKind { Toolbar, Status, Hud }
+    private enum TextKind { Toolbar, Status, Hud, Toast }
 
     private static readonly object FormatLock = new();
     private static readonly Dictionary<(TextKind, int), IDWriteTextFormat> Formats = new();
@@ -157,6 +158,9 @@ public sealed class HandScene
         public required ID2D1SolidColorBrush HudBg { get; init; }
         public required ID2D1SolidColorBrush HudBorder { get; init; }
         public required ID2D1SolidColorBrush HudText { get; init; }
+        public required ID2D1SolidColorBrush ToastBg { get; init; }
+        public required ID2D1SolidColorBrush ToastBorder { get; init; }
+        public required ID2D1SolidColorBrush ToastText { get; init; }
 
         private readonly Dictionary<int, ID2D1Bitmap1> _handCache = new();
 
@@ -250,6 +254,9 @@ public sealed class HandScene
             HudBg.Dispose();
             HudBorder.Dispose();
             HudText.Dispose();
+            ToastBg.Dispose();
+            ToastBorder.Dispose();
+            ToastText.Dispose();
             RoundStroke.Dispose();
             Ink.Dispose();
             // Context is owned by OverlaySurface, not the scene resources.
@@ -284,6 +291,9 @@ public sealed class HandScene
             HudBg = brush(20 / 255f, 20 / 255f, 26 / 255f, 220 / 255f),
             HudBorder = brush(244 / 255f, 51 / 255f, 118 / 255f, 1),
             HudText = brush(1, 1, 1, 1),
+            ToastBg = brush(20 / 255f, 20 / 255f, 26 / 255f, 240 / 255f),
+            ToastBorder = brush(244 / 255f, 51 / 255f, 118 / 255f, 1),
+            ToastText = brush(1, 1, 1, 1),
         };
     }
 
@@ -296,6 +306,7 @@ public sealed class HandScene
             {
                 TextKind.Toolbar => ("Segoe UI", FontWeight.Bold, 15f * scale, TextAlignment.Center, ParagraphAlignment.Center),
                 TextKind.Status => ("Consolas", FontWeight.Normal, 12f, TextAlignment.Leading, ParagraphAlignment.Near),
+                TextKind.Toast => ("Segoe UI", FontWeight.Bold, 18f * scale, TextAlignment.Center, ParagraphAlignment.Center),
                 _ => ("Consolas", FontWeight.Bold, 13f * scale, TextAlignment.Center, ParagraphAlignment.Center),
             };
             var format = Write.Value.CreateTextFormat(family, null, weight, FontStyle.Normal, FontStretch.Normal,
@@ -326,6 +337,7 @@ public sealed class HandScene
         if (scene.IsPrimary)
         {
             DrawToolbar(ctx, res, scene.Toolbar, scale);
+            DrawToast(ctx, res, monitor, scene.Toast, scale);
             DrawStatus(ctx, res, monitor, scene.Status, scale);
             DrawHud(ctx, res, monitor, scene.FpsHud, scale);
         }
@@ -363,6 +375,20 @@ public sealed class HandScene
             ctx.DrawRectangle(rect, res.ToolbarBorder, border);
             ctx.DrawText(button.Label, TextFormat(TextKind.Toolbar, scale), rect, res.ToolbarText);
         }
+    }
+
+    /// <summary>Transient feedback chip under the toolbar (hotkey changes: smoothing level,
+    /// fade, clear). Centred on the primary monitor so the current setting is obvious.</summary>
+    private static void DrawToast(ID2D1DeviceContext ctx, SceneResources res, MonitorInfo monitor, string text,
+        int scale)
+    {
+        if (string.IsNullOrEmpty(text)) return;
+        int w = 460 * scale;
+        int h = 56 * scale;
+        var rect = new Rect((monitor.Bounds.Width - w) / 2, 92 * scale, w, h);
+        ctx.FillRectangle(rect, res.ToastBg);
+        ctx.DrawRectangle(rect, res.ToastBorder, 2f * scale);
+        ctx.DrawText(text, TextFormat(TextKind.Toast, scale), rect, res.ToastText);
     }
 
     private static void DrawStatus(ID2D1DeviceContext ctx, SceneResources res, MonitorInfo monitor, string status,
