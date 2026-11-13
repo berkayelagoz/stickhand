@@ -66,11 +66,12 @@ Swift/AppKit ve C#/WinForms aynı depoda iki ayrı uygulamadır; kod paylaşım�
 
 - **state.json** (macOS: `~/Library/Application Support/TinyHand/` — Windows: `%APPDATA%\TinyHand\`): pid, aktiflik, seçili stil, ses **ve styles listesi** (custom eller dahil, değişince yeniden yazılır). `style/<id>` komutu overlay'i açar; **normal çıkışta dosya silinir**.
 - **URL komut grameri**: `tinyhand://on | off | toggle | clear | style/<id> | sound/<arg>`; aynı komut seti, aynı bilinmeyen komut davranışı.
-- **Stil kümesi**: 36 yerleşik stil + custom PNG eller; aynı id'ler ve sıra (toolbar her iki tarafta aynı el kümesini gösterir).
+- **Stil kümesi**: 36 yerleşik stil + laser + custom PNG eller; aynı id'ler ve sıra (toolbar her iki tarafta aynı el kümesini gösterir). Yerleşik asset PNG'ler (macOS `assets/hand_*.png`) **el + sap compose'ı içerir** — el, hafif eğik uzun bir sap/stem ile tutulur (kullanıcı görsel referansı, 13 Kasım); aynı PNG'ler Windows tarafına gömülür, sap görünümü ek iş gerektirmez.
 - **HandMaker çıktı sözleşmesi**: aynı prompt şablonu; PNG doğrulaması aynı kurallarla (şeffaf arka plan zorunlu, portre kare, parmak ucu en yüksek nokta, tam el görünür); compose çıktısı aynı biçimde el + sap; mürekkep rengi aynı algoritmayla çıkarılır. C# portu bu kuralları birebir izler.
 - **Click-through ve imleç**: çift Shift kalıcı click-through modunda TinyHand eli görünür kalır, gerçek imleç gizli kalır. Ayarlanabilir interact tuşu (macOS varsayılan ⌥) basılıyken geçici click-through; `interactKeepsHand` true ise el görünür kalır, false (varsayılan) ise gerçek imleç görünür ve el gizlenir.
+- **Mürekkep rengi**: `Preferences.InkChoice` birebir — varsayılan `.match` = seçili el stilinin rengi ("el hangi renkse o renkte çizer"); sabit seçenekler red/orange/yellow/green/blue/purple(`#8754F2`)/white/black; stil renkleri `PointerStyle` tablosundaki hex değerleridir.
 - **Fade**: `Preferences.fadeSeconds` aynı varsayılan ve aralık.
-- **Ses**: aynı tap sesi seti.
+- **Ses**: aynı tap sesi seti — macOS tarafında gömülü `tap_*.wav` dosyaları: thock, click, tock, clack, typewriter, snap, wood block, pop, boop, blip, coin, pew, squeak, quack, chirp (15 ses; aynı dosyalar depodaki `assets/` altından Windows'a gömülür), davranış: tıklamada çalma.
 
 ## Erken doğrulanacak varsayım (M1 spike)
 
@@ -146,7 +147,7 @@ Karar gereği M2'den önce uygulanır; gerekçe spike bölümündeki sonuç notu
 
 ### M2 — Çizim
 - [ ] Sürükle → mürekkep çizimi (Direct2D; M1.5 sonrası), renk/kalınluk ölçeği
-  - Görsel sözleşme (macOS `Ink.swift` ile birebir — 13 Kasım 2026 kaynak taraması): renk **mor** `sRGB(0.53, 0.33, 0.95)`; stroke gölgesi siyah, opacity 0.18, radius 1.5, offset (1, −1.5); yuvarlak cap/join; **yumuşatılmış path** (macOS `smoothPath`) + **1.5 pt mesafe dedup** (`extend`); kalınlık `max(3, monitörYüksekliği × 0.0055)` (`ArmView.inkWidth`), DPI ile ölçekli
+  - Görsel sözleşme (macOS `Ink.swift` + `Preferences.InkChoice` — 13 Kasım 2026 kaynak taraması): **renk `InkChoice` ile belirlenir** — varsayılan `.match` = seçili el stilinin rengi (`PointerStyle` tablosundaki hex; kullanıcı gözlemi: "el hangi renkse o renkte çiziyor"); sabit seçenekler red/orange/yellow/green/blue/purple(`#8754F2`)/white/black (`Preferences.inkChoice`, ayarı M4'te); stroke gölgesi siyah, opacity 0.18, radius 1.5, offset (1, −1.5); yuvarlak cap/join; **yumuşatılmış path** (macOS `smoothPath`) + **1.5 pt mesafe dedup** (`extend`); kalınlık `max(3, monitörYüksekliği × 0.0055)` (`ArmView.inkWidth`), DPI ile ölçekli
   - InkLayer mimarisi per-stroke fade'ye hazır: macOS da stroke bitince bitmap'e dondurur (`freeze`); M2'de kalıcı katman per-stroke bitmap/lifetime'a genişletilir (üst üste stroke'lar bağımsız solar)
 - [ ] Ctrl basılıyken ok ucu *(başlangıçta Ctrl önerilir; onay **bekliyor**)* — ok başı `size = max(14, lineWidth × 3.2)` (macOS `addHead`)
 - [ ] Fade animasyonu (`Preferences.fadeSeconds` uyumlu): per-stroke, delay `max(0.5, fadeSeconds)`, süre **0.6 s**, easeIn; bittikten sonra stroke kaynağından çıkar (macOS `fade`)
@@ -158,7 +159,7 @@ Karar gereği M2'den önce uygulanır; gerekçe spike bölümündeki sonuç notu
 - [ ] Basılı interact tuşu → geçici click-through (macOS `interactKey`, varsayılan ⌥ ↔ Alt); `interactKeepsHand` davranışı: tuş basılıyken el kalır ya da gerçek imleç görünür
 - [ ] Toolbar: 36 stil + lazer + ses düğmesi + çıkış; hit-test / `passThroughRects` mantığı
   - Görsel sözleşme (macOS `Toolbar.swift`): darkGlass vibrancy panel'in Windows karşılığı: yarı saydam koyu arka plan + 16 px köşe radiusu, panel 300×56, yatay stack spacing 6; acrylic/blur gerekliliği ölçülerek karar verilir (GDI+ benzeri elle boyanmış gradient de bir seçenek)
-- [ ] **El görsel eşliği** (macOS `ArmView`): basınç/kalkma ile dinamik gölge (opacity `0.26 + 0.02 × press`, radius `lift × 0.35 + 5 × press`, offset lift'e göre), parmak ucunda kırmızı parlayan mürekkep noktası (`dotLayer`, shadow radius `r × (2.2 + press)`), stil başına `tip/tipX` pin; bunlar statik sprite'tan davranışsal sprite'a geçiş gerektirir (M1'de tek stil + tek sprite vardı)
+- [ ] **El görsel eşliği** (macOS `ArmView`; asset PNG'ler el + sap compose'ıyla geldiğinden sap için ek iş yok): basınç/kalkma ile dinamik gölge (opacity `0.26 + 0.02 × press`, radius `lift × 0.35 + 5 × press`, offset lift'e göre), parmak ucunda kırmızı parlayan mürekkep noktası (`dotLayer`, shadow radius `r × (2.2 + press)`), stil başına `tip/tipX` pin; bunlar statik sprite'tan davranışsal sprite'a geçiş gerektirir (M1'de tek stil + tek sprite vardı)
 - [ ] `TapSound` (NAudio), ses aç/kapa
 - [ ] Busy 120 Hz / idle 20 Hz fps yönetimi (OverlayController mantığı)
 - **Çıkış kriteri:** macOS kullanım tablosundaki her davranış el ile yapılabilir, akıcı.
