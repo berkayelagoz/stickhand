@@ -1,29 +1,26 @@
 using System.Runtime.InteropServices;
 using TinyHand.Interop;
+using TinyHand.Logic;
 
 namespace TinyHand;
 
 /// <summary>
-/// Message-only helper window that receives WM_HOTKEY for RegisterHotKey
-/// registrations (Ctrl+Alt+H toggle). Runs on the WinForms UI thread.
+/// Message-only helper window that receives WM_HOTKEY for RegisterHotKey registrations.
+/// Runs on the WinForms UI thread. The toggle and clear chords come from
+/// <see cref="Preferences"/> (macOS ⌃⌥H / ⌃⌥X defaults) and are re-registered when the
+/// settings window records a new one; fade, smoothing and quit stay fixed.
 /// </summary>
 internal sealed class HotkeyHost : NativeWindow, IDisposable
 {
     public const int ToggleId = 1;
-    public const uint ToggleModifiers = Win32.MOD_CONTROL | Win32.MOD_ALT;
-    public const uint ToggleVk = 0x48; // 'H'
-
     public const int QuitId = 2;
-    public const uint QuitVk = 0x51; // 'Q' — full app quit (tray menu also has Exit)
-
     public const int ClearId = 3;
-    public const uint ClearVk = 0x58; // 'X' — clear ink (macOS ⌃⌥X)
-
     public const int FadeId = 4;
-    public const uint FadeVk = 0x46; // 'F' — toggle the ink auto-fade
-
     public const int SmoothId = 5;
-    public const uint SmoothVk = 0x53; // 'S' — cycle the pointer smoothing strength
+
+    public static readonly Hotkey QuitShortcut = new(Win32.MOD_CONTROL | Win32.MOD_ALT, 0x51, "Ctrl+Alt+Q");
+    public static readonly Hotkey FadeShortcut = new(Win32.MOD_CONTROL | Win32.MOD_ALT, 0x46, "Ctrl+Alt+F");
+    public static readonly Hotkey SmoothShortcut = new(Win32.MOD_CONTROL | Win32.MOD_ALT, 0x53, "Ctrl+Alt+S");
 
     public event Action<int>? HotkeyPressed;
 
@@ -32,20 +29,29 @@ internal sealed class HotkeyHost : NativeWindow, IDisposable
         CreateHandle(new CreateParams { Caption = "TinyHandHotkeyHost" });
     }
 
-    public bool RegisterToggle() =>
-        User32.RegisterHotKey(Handle, ToggleId, ToggleModifiers | Win32.MOD_NOREPEAT, ToggleVk);
+    /// <summary>Register (or re-register) the pointer toggle chord.</summary>
+    public bool RegisterToggle(Hotkey shortcut) => Register(ToggleId, shortcut);
 
-    public bool RegisterQuit() =>
-        User32.RegisterHotKey(Handle, QuitId, ToggleModifiers | Win32.MOD_NOREPEAT, QuitVk);
+    /// <summary>Register (or re-register) the clear-ink chord.</summary>
+    public bool RegisterClear(Hotkey shortcut) => Register(ClearId, shortcut);
 
-    public bool RegisterClear() =>
-        User32.RegisterHotKey(Handle, ClearId, ToggleModifiers | Win32.MOD_NOREPEAT, ClearVk);
+    public bool RegisterQuit() => Register(QuitId, QuitShortcut);
 
-    public bool RegisterFade() =>
-        User32.RegisterHotKey(Handle, FadeId, ToggleModifiers | Win32.MOD_NOREPEAT, FadeVk);
+    public bool RegisterFade() => Register(FadeId, FadeShortcut);
 
-    public bool RegisterSmooth() =>
-        User32.RegisterHotKey(Handle, SmoothId, ToggleModifiers | Win32.MOD_NOREPEAT, SmoothVk);
+    public bool RegisterSmooth() => Register(SmoothId, SmoothShortcut);
+
+    /// <summary>Release the toggle chord while the settings window records a new one
+    /// (macOS unregisters its hotkeys during recording for the same reason).</summary>
+    public void UnregisterToggle() => User32.UnregisterHotKey(Handle, ToggleId);
+
+    public void UnregisterClear() => User32.UnregisterHotKey(Handle, ClearId);
+
+    private bool Register(int id, Hotkey shortcut)
+    {
+        User32.UnregisterHotKey(Handle, id);
+        return User32.RegisterHotKey(Handle, id, shortcut.Modifiers | Win32.MOD_NOREPEAT, shortcut.Vk);
+    }
 
     public void Dispose()
     {

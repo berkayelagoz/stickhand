@@ -35,6 +35,11 @@ internal static class M3Check
     {
         Program.TryAttachConsole();
 
+        // Isolate the style list from the user's custom hands: the toolbar geometry checks
+        // below assume the 36 built-in hands plus the laser.
+        Environment.SetEnvironmentVariable("TH_HANDS_DIR",
+            Path.Combine(Path.GetTempPath(), "tinyhand-m3-hands"));
+
         var primary = Monitors.Primary() ?? throw new InvalidOperationException("no monitor");
         var mode = Monitors.CurrentMode();
         int scale = Math.Max(1, (int)Math.Round(primary.DpiX / 96.0, MidpointRounding.AwayFromZero));

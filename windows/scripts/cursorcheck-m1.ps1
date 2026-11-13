@@ -127,6 +127,10 @@ try {
     $gfx.CopyFromScreen($strip.X, $strip.Y, 0, 0, $baseline.Size)
     $gfx.Dispose()
 
+    # Keep the real profile clean and skip the first-run card (M4).
+    $env:TH_WELCOME_SHOWN = '1'
+    $env:TH_SETTINGS_DIR = Join-Path $env:TEMP 'tinyhand-e2e'
+    Remove-Item -Recurse -Force $env:TH_SETTINGS_DIR -ErrorAction SilentlyContinue
     $app = Start-Process -FilePath $TinyHandExe -PassThru
     Pump 3500 # auto-activate (draw mode)
 

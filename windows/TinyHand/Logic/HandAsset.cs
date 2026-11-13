@@ -84,7 +84,7 @@ public static class HandAssets
             }
         }
 
-        Bitmap? bitmap = LoadEmbedded(ResourceName(styleId));
+        Bitmap? bitmap = LoadSprite(styleId);
         if (bitmap is null) return null;
 
         lock (Gate)
@@ -450,6 +450,41 @@ public static class HandAssets
             return null;
         }
         return new Bitmap(stream);
+    }
+
+    /// <summary>Built-in sprites come from the embedded resources; custom hands are PNGs in
+    /// the hands directory (macOS <c>HandAsset.loadImage</c> checks the same two places).</summary>
+    private static Bitmap? LoadSprite(string styleId)
+    {
+        string? customPath = CustomHands.PathFor(styleId);
+        if (customPath is null) return LoadEmbedded(ResourceName(styleId));
+        try
+        {
+            if (!File.Exists(customPath)) return null;
+            // Decode from memory: GDI+ keeps a file-backed Bitmap's file locked, and a
+            // deleted custom hand must be removable while its sprite is still cached.
+            return new Bitmap(new MemoryStream(File.ReadAllBytes(customPath)));
+        }
+        catch (Exception ex)
+        {
+            System.Diagnostics.Debug.WriteLine($"custom hand sprite failed: {ex.Message}");
+            return null;
+        }
+    }
+
+    /// <summary>Drop every cached derivative of a style (macOS <c>HandAsset.forget</c>): a
+    /// deleted custom hand must not keep its sprite, thumbnail or shadow alive.</summary>
+    public static void Forget(string styleId)
+    {
+        lock (Gate)
+        {
+            MetricsCache.Remove(styleId);
+            ThumbnailCache.Remove(styleId);
+            FullCache.Remove(styleId);
+            FullOrder.Remove(styleId);
+            foreach (var key in ShadowCache.Keys.Where(k => k.Style == styleId).ToList())
+                ShadowCache.Remove(key);
+        }
     }
 
     /// <summary>GDI+ 32bppArgb lock (memory order BGRA, straight alpha) converted to

@@ -67,7 +67,7 @@ internal static class InkCheck
             if (id == HotkeyHost.FadeId) controller.ToggleFade();
             if (id == HotkeyHost.SmoothId) controller.ToggleSmoothing();
         };
-        if (!hotkeys.RegisterClear())
+        if (!hotkeys.RegisterClear(Preferences.ClearShortcut))
             Console.WriteLine("  WARN: RegisterHotKey Ctrl+Alt+X failed");
         if (!hotkeys.RegisterFade())
             Console.WriteLine("  WARN: RegisterHotKey Ctrl+Alt+F failed");

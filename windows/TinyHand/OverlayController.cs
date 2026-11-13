@@ -173,6 +173,12 @@ public sealed class OverlayController : IDisposable
 
     public event Action<bool>? ActiveChanged;
 
+    /// <summary>Raised when the pointer style changes (toolbar pick, URL command, settings).</summary>
+    public event Action? StyleChanged;
+
+    /// <summary>Raised when the tap sound is turned on or off.</summary>
+    public event Action? SoundChanged;
+
     public bool IsActive => _active;
 
     /// <summary>Effective click-through: latched by double Shift or held by the interact key.</summary>
@@ -965,15 +971,30 @@ public sealed class OverlayController : IDisposable
         RefreshToolbar();
         ShowToast(style.Title);
         _dirty = true;
+        StyleChanged?.Invoke();
     }
 
     /// <summary>Toolbar speaker button: tap sound on/off.</summary>
-    public void ToggleSound()
+    public void ToggleSound() => SetSound(!Preferences.SoundOn);
+
+    /// <summary>Set the tap sound explicitly (toolbar, settings window, <c>sound/on|off</c>).</summary>
+    public void SetSound(bool on)
     {
-        Preferences.SoundOn = !Preferences.SoundOn;
-        _tapSound.Enabled = Preferences.SoundOn;
+        if (Preferences.SoundOn == on) return;
+        Preferences.SoundOn = on;
+        _tapSound.Enabled = on;
         RefreshToolbar();
-        ShowToast(Preferences.SoundOn ? "Sound: on" : "Sound: off");
+        ShowToast(on ? "Sound: on" : "Sound: off");
+        _dirty = true;
+        SoundChanged?.Invoke();
+    }
+
+    /// <summary>Re-read the style list after a custom hand was added or removed (the toolbar
+    /// and the hand sprite follow the new set on the next frame).</summary>
+    public void RefreshStyles()
+    {
+        _styleDirty = true;
+        RefreshToolbar();
         _dirty = true;
     }
 

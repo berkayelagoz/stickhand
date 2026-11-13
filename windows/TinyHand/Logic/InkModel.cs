@@ -116,14 +116,29 @@ public sealed record PointerStyle(string Id, string Title, Color Ink)
     /// <summary>True for the laser dot: no hand sprite, a glowing red dot at the pointer.</summary>
     public bool IsLaser => Id == Laser.Id;
 
-    /// <summary>Embedded sprite name (<c>hand_lavender</c>), null for the laser.</summary>
-    public string? AssetName => IsLaser ? null : $"hand_{Id}";
+    /// <summary>True for a user-made hand (macOS <c>PointerStyle.isCustom</c>).</summary>
+    public bool IsCustom => CustomHands.Hand(Id) is not null;
 
-    /// <summary>All 36 built-in hands plus the laser dot, in the macOS toolbar order.</summary>
-    public static IReadOnlyList<PointerStyle> All { get; } = [.. BuiltIn, Laser];
+    /// <summary>Sprite name: <c>hand_lavender</c> for built-ins, the raw id for custom hands
+    /// (their PNG lives in the hands directory), null for the laser.</summary>
+    public string? AssetName => IsLaser ? null : IsCustom ? Id : $"hand_{Id}";
 
-    public static PointerStyle ById(string id) =>
-        All.FirstOrDefault(style => style.Id == id) ?? Default;
+    /// <summary>All 36 built-in hands, the user's custom hands, then the laser dot — the
+    /// macOS toolbar order. Computed on each call so a new custom hand shows up immediately.</summary>
+    public static IReadOnlyList<PointerStyle> All =>
+    [
+        .. BuiltIn,
+        .. CustomHands.All.Select(hand => new PointerStyle(hand.Id, hand.Name, InkPalette.Rgb(hand.Ink))),
+        Laser,
+    ];
+
+    public static PointerStyle ById(string id)
+    {
+        if (CustomHands.Hand(id) is { } custom)
+            return new PointerStyle(custom.Id, custom.Name, InkPalette.Rgb(custom.Ink));
+        if (id == Laser.Id) return Laser;
+        return BuiltIn.FirstOrDefault(style => style.Id == id) ?? Default;
+    }
 }
 
 /// <summary>macOS <c>ArmView.inkWidth</c> / <c>Ink.addHead</c> / <c>Ink.extend</c> metrics.</summary>
@@ -284,11 +299,12 @@ public enum InteractKey
 }
 
 /// <summary>
-/// M2/M3 preference values. The settings window and persistence are M4; until then the macOS
-/// defaults apply, environment variables override the initial values for diagnostics
-/// (<c>TH_FADE=0</c> keeps ink forever, <c>TH_STYLE=laser</c>, <c>TH_INTERACT=off</c>,
-/// <c>TH_KEEPS_HAND=1</c>, <c>TH_SOUND=0</c>, <c>TH_TAPSOUND=click</c>) and the hotkeys /
-/// toolbar change them at runtime.
+/// Preference values (macOS <c>Preferences</c>). M4 persists them to
+/// <c>%APPDATA%\TinyHand\settings.json</c> through <see cref="SettingsStore"/>; environment
+/// variables still override the initial values for diagnostics (<c>TH_FADE=0</c> keeps ink
+/// forever, <c>TH_STYLE=laser</c>, <c>TH_INTERACT=off</c>, <c>TH_KEEPS_HAND=1</c>,
+/// <c>TH_SOUND=0</c>, <c>TH_TAPSOUND=click</c>) and the hotkeys / toolbar / settings window
+/// change them at runtime.
 /// </summary>
 public static class Preferences
 {
@@ -303,18 +319,37 @@ public static class Preferences
     public static double FadeSeconds
     {
         get => Volatile.Read(ref _fadeSeconds);
-        set => Volatile.Write(ref _fadeSeconds, value);
+        set
+        {
+            Volatile.Write(ref _fadeSeconds, value);
+            SettingsStore.Update(d => d.FadeSeconds = value);
+        }
     }
 
-    public static InkChoice InkChoice { get; } = InkChoice.Match;
+    private static int _inkChoice = (int)ReadInkChoice();
 
-    private static int _smoothingLevel = (int)SmoothingLevel.Max;
+    /// <summary>Ink colour choice (macOS <c>Preferences.inkChoice</c>, default match).</summary>
+    public static InkChoice InkChoice
+    {
+        get => (InkChoice)Volatile.Read(ref _inkChoice);
+        set
+        {
+            Volatile.Write(ref _inkChoice, (int)value);
+            SettingsStore.Update(d => d.InkChoice = value.ToString());
+        }
+    }
+
+    private static int _smoothingLevel = (int)ReadSmoothing();
 
     /// <summary>Pointer smoothing strength; Ctrl+Alt+S cycles it at runtime.</summary>
     public static SmoothingLevel SmoothingLevel
     {
         get => (SmoothingLevel)Volatile.Read(ref _smoothingLevel);
-        set => Volatile.Write(ref _smoothingLevel, (int)value);
+        set
+        {
+            Volatile.Write(ref _smoothingLevel, (int)value);
+            SettingsStore.Update(d => d.SmoothingLevel = value.ToString());
+        }
     }
 
     private static PointerStyle _style = ReadStyle();
@@ -324,7 +359,11 @@ public static class Preferences
     public static PointerStyle Style
     {
         get => Volatile.Read(ref _style);
-        set => Volatile.Write(ref _style, value);
+        set
+        {
+            Volatile.Write(ref _style, value);
+            SettingsStore.Update(d => d.Style = value.Id);
+        }
     }
 
     private static float _pointerSize = ReadFloat("TH_POINTER_SIZE", DefaultPointerSize);
@@ -333,7 +372,12 @@ public static class Preferences
     public static float PointerSize
     {
         get => Volatile.Read(ref _pointerSize);
-        set => Volatile.Write(ref _pointerSize, Math.Clamp(value, 0.08f, 0.20f));
+        set
+        {
+            float clamped = Math.Clamp(value, 0.08f, 0.20f);
+            Volatile.Write(ref _pointerSize, clamped);
+            SettingsStore.Update(d => d.PointerSize = clamped);
+        }
     }
 
     private static int _showShadow = ReadFlag("TH_SHADOW", true) ? 1 : 0;
@@ -342,7 +386,11 @@ public static class Preferences
     public static bool ShowShadow
     {
         get => Volatile.Read(ref _showShadow) != 0;
-        set => Volatile.Write(ref _showShadow, value ? 1 : 0);
+        set
+        {
+            Volatile.Write(ref _showShadow, value ? 1 : 0);
+            SettingsStore.Update(d => d.ShowShadow = value);
+        }
     }
 
     private static int _interactKey = (int)ReadInteractKey();
@@ -351,7 +399,11 @@ public static class Preferences
     public static InteractKey InteractKey
     {
         get => (InteractKey)Volatile.Read(ref _interactKey);
-        set => Volatile.Write(ref _interactKey, (int)value);
+        set
+        {
+            Volatile.Write(ref _interactKey, (int)value);
+            SettingsStore.Update(d => d.InteractKey = value.ToString());
+        }
     }
 
     private static int _interactKeepsHand = ReadFlag("TH_KEEPS_HAND", false) ? 1 : 0;
@@ -361,7 +413,11 @@ public static class Preferences
     public static bool InteractKeepsHand
     {
         get => Volatile.Read(ref _interactKeepsHand) != 0;
-        set => Volatile.Write(ref _interactKeepsHand, value ? 1 : 0);
+        set
+        {
+            Volatile.Write(ref _interactKeepsHand, value ? 1 : 0);
+            SettingsStore.Update(d => d.InteractKeepsHand = value);
+        }
     }
 
     private static int _soundOn = ReadFlag("TH_SOUND", true) ? 1 : 0;
@@ -370,7 +426,11 @@ public static class Preferences
     public static bool SoundOn
     {
         get => Volatile.Read(ref _soundOn) != 0;
-        set => Volatile.Write(ref _soundOn, value ? 1 : 0);
+        set
+        {
+            Volatile.Write(ref _soundOn, value ? 1 : 0);
+            SettingsStore.Update(d => d.SoundOn = value);
+        }
     }
 
     private static int _doubleShiftClickThrough = ReadFlag("TH_DOUBLE_SHIFT", true) ? 1 : 0;
@@ -379,7 +439,11 @@ public static class Preferences
     public static bool DoubleShiftClickThrough
     {
         get => Volatile.Read(ref _doubleShiftClickThrough) != 0;
-        set => Volatile.Write(ref _doubleShiftClickThrough, value ? 1 : 0);
+        set
+        {
+            Volatile.Write(ref _doubleShiftClickThrough, value ? 1 : 0);
+            SettingsStore.Update(d => d.DoubleShiftClickThrough = value);
+        }
     }
 
     private static int _tapSound = (int)ReadTapSound();
@@ -388,16 +452,87 @@ public static class Preferences
     public static TapSoundChoice TapSound
     {
         get => (TapSoundChoice)Volatile.Read(ref _tapSound);
-        set => Volatile.Write(ref _tapSound, (int)value);
+        set
+        {
+            Volatile.Write(ref _tapSound, (int)value);
+            SettingsStore.Update(d => d.TapSound = value.ToString());
+        }
+    }
+
+    private static Hotkey _toggleShortcut = ReadShortcut("toggleShortcut", Hotkey.ToggleDefault);
+
+    /// <summary>Global shortcut that turns the pointer on or off (macOS ⌃⌥H).</summary>
+    public static Hotkey ToggleShortcut
+    {
+        get => Volatile.Read(ref _toggleShortcut);
+        set
+        {
+            Volatile.Write(ref _toggleShortcut, value);
+            SettingsStore.Update(d => d.ToggleShortcut = value.Display);
+        }
+    }
+
+    private static Hotkey _clearShortcut = ReadShortcut("clearShortcut", Hotkey.ClearDefault);
+
+    /// <summary>Global shortcut that clears the drawing (macOS ⌃⌥X).</summary>
+    public static Hotkey ClearShortcut
+    {
+        get => Volatile.Read(ref _clearShortcut);
+        set
+        {
+            Volatile.Write(ref _clearShortcut, value);
+            SettingsStore.Update(d => d.ClearShortcut = value.Display);
+        }
+    }
+
+    private static int _welcomeShown = ReadFlag("TH_WELCOME_SHOWN", false) ? 1 : 0;
+
+    /// <summary>macOS <c>welcomeShown</c>: the first-run card is shown once.</summary>
+    public static bool WelcomeShown
+    {
+        get => Volatile.Read(ref _welcomeShown) != 0;
+        set
+        {
+            Volatile.Write(ref _welcomeShown, value ? 1 : 0);
+            SettingsStore.Update(d => d.WelcomeShown = value);
+        }
+    }
+
+    /// <summary>Re-read every value from <see cref="SettingsStore"/> (settings window reset,
+    /// harness round-trip checks). Environment overrides still win.</summary>
+    public static void Reload()
+    {
+        var data = SettingsStore.Data;
+        Volatile.Write(ref _fadeSeconds, ReadFadeSeconds());
+        Volatile.Write(ref _inkChoice, (int)ReadInkChoice());
+        Volatile.Write(ref _smoothingLevel, (int)ReadSmoothing());
+        Volatile.Write(ref _style, ReadStyle());
+        Volatile.Write(ref _pointerSize, ReadFloat("TH_POINTER_SIZE", data.PointerSize ?? DefaultPointerSize));
+        Volatile.Write(ref _showShadow, ReadFlag("TH_SHADOW", data.ShowShadow ?? true) ? 1 : 0);
+        Volatile.Write(ref _interactKey, (int)ReadInteractKey());
+        Volatile.Write(ref _interactKeepsHand, ReadFlag("TH_KEEPS_HAND", data.InteractKeepsHand ?? false) ? 1 : 0);
+        Volatile.Write(ref _soundOn, ReadFlag("TH_SOUND", data.SoundOn ?? true) ? 1 : 0);
+        Volatile.Write(ref _doubleShiftClickThrough, ReadFlag("TH_DOUBLE_SHIFT", data.DoubleShiftClickThrough ?? true) ? 1 : 0);
+        Volatile.Write(ref _tapSound, (int)ReadTapSound());
+        Volatile.Write(ref _toggleShortcut, ReadShortcut("toggleShortcut", Hotkey.ToggleDefault));
+        Volatile.Write(ref _clearShortcut, ReadShortcut("clearShortcut", Hotkey.ClearDefault));
+        Volatile.Write(ref _welcomeShown, ReadFlag("TH_WELCOME_SHOWN", data.WelcomeShown ?? false) ? 1 : 0);
+    }
+
+    /// <summary>macOS <c>Preferences.resetAll</c>: every value back to its default.</summary>
+    public static void ResetAll()
+    {
+        SettingsStore.Reset();
+        Reload();
     }
 
     private static double ReadFadeSeconds()
     {
         string? raw = Environment.GetEnvironmentVariable("TH_FADE");
-        return double.TryParse(raw, System.Globalization.NumberStyles.Float,
-            System.Globalization.CultureInfo.InvariantCulture, out double value)
-            ? value
-            : DefaultFadeSeconds;
+        if (double.TryParse(raw, System.Globalization.NumberStyles.Float,
+                System.Globalization.CultureInfo.InvariantCulture, out double value))
+            return value;
+        return SettingsStore.Data.FadeSeconds ?? DefaultFadeSeconds;
     }
 
     private static float ReadFloat(string name, float fallback)
@@ -419,12 +554,14 @@ public static class Preferences
     private static PointerStyle ReadStyle()
     {
         string? raw = Environment.GetEnvironmentVariable("TH_STYLE");
-        return string.IsNullOrEmpty(raw) ? PointerStyle.Default : PointerStyle.ById(raw);
+        if (!string.IsNullOrEmpty(raw)) return PointerStyle.ById(raw);
+        string? saved = SettingsStore.Data.Style;
+        return string.IsNullOrEmpty(saved) ? PointerStyle.Default : PointerStyle.ById(saved);
     }
 
     private static InteractKey ReadInteractKey()
     {
-        string? raw = Environment.GetEnvironmentVariable("TH_INTERACT");
+        string? raw = Environment.GetEnvironmentVariable("TH_INTERACT") ?? SettingsStore.Data.InteractKey;
         return raw?.ToLowerInvariant() switch
         {
             "off" or "none" => InteractKey.Off,
@@ -436,9 +573,31 @@ public static class Preferences
 
     private static TapSoundChoice ReadTapSound()
     {
-        string? raw = Environment.GetEnvironmentVariable("TH_TAPSOUND");
+        string? raw = Environment.GetEnvironmentVariable("TH_TAPSOUND") ?? SettingsStore.Data.TapSound;
         return Enum.TryParse<TapSoundChoice>(raw, ignoreCase: true, out var choice)
             ? choice
             : TapSoundChoice.Thock;
+    }
+
+    private static InkChoice ReadInkChoice()
+    {
+        string? raw = Environment.GetEnvironmentVariable("TH_INK") ?? SettingsStore.Data.InkChoice;
+        return Enum.TryParse<InkChoice>(raw, ignoreCase: true, out var choice)
+            ? choice
+            : InkChoice.Match;
+    }
+
+    private static SmoothingLevel ReadSmoothing()
+    {
+        string? raw = Environment.GetEnvironmentVariable("TH_SMOOTH") ?? SettingsStore.Data.SmoothingLevel;
+        return Enum.TryParse<SmoothingLevel>(raw, ignoreCase: true, out var level)
+            ? level
+            : SmoothingLevel.Max;
+    }
+
+    private static Hotkey ReadShortcut(string key, Hotkey fallback)
+    {
+        string? raw = key == "toggleShortcut" ? SettingsStore.Data.ToggleShortcut : SettingsStore.Data.ClearShortcut;
+        return Hotkey.TryParse(raw, out var shortcut) ? shortcut : fallback;
     }
 }
