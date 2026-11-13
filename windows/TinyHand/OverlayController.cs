@@ -119,6 +119,7 @@ public sealed class OverlayController : IDisposable
     // Ink feed: the hook appends stroke lifecycle events, each monitor's InkLayer paints
     // only the new points into its live bitmap and freezes finished strokes for the fade.
     private readonly InkJournal _journal = new();
+    private readonly InkSmoother _smoother = new();
     private Point _downPoint;
     private Point _lastInkPoint;
     private bool _strokeStarted;
@@ -717,6 +718,9 @@ private void RenderFrame(bool busy)
                     _drawing = false;
                     if (_strokeStarted)
                     {
+                        // Catch the stroke up to the release point: the filter trails the
+                        // cursor by a few pixels at speed.
+                        AppendStroke(e.X, e.Y, raw: true);
                         _journal.End();
                         _strokeStarted = false;
                     }
@@ -769,7 +773,10 @@ private void RenderFrame(bool busy)
         if (tracked)
         {
             _drawing = true;
-            _downPoint = new Point((int)Interlocked.Read(ref _cursorX), (int)Interlocked.Read(ref _cursorY));
+            _smoother.Reset();
+            _downPoint = _smoother.Filter(
+                new Point((int)Interlocked.Read(ref _cursorX), (int)Interlocked.Read(ref _cursorY)),
+                _clock.Elapsed.TotalSeconds);
             _lastInkPoint = _downPoint;
             _strokeStarted = false;
             _dirty = true;
@@ -895,10 +902,12 @@ private void RenderFrame(bool busy)
     }
 
     /// <summary>macOS OverlayController.drag(): the stroke starts only after 4 pt of movement
-    /// (a plain click leaves no ink), then every point at least 1.5 pt away is appended.</summary>
-    private void AppendStroke(int x, int y)
+    /// (a plain click leaves no ink), then every point at least 1.5 pt away is appended.
+    /// Points pass through the One Euro filter first, so the hand's jitter does not wobble
+    /// the line; <paramref name="raw"/> skips the filter for the release catch-up.</summary>
+    private void AppendStroke(int x, int y, bool raw = false)
     {
-        var to = new Point(x, y);
+        var to = raw ? new Point(x, y) : _smoother.Filter(new Point(x, y), _clock.Elapsed.TotalSeconds);
         int scale = PrimaryScale();
         if (!_strokeStarted)
         {

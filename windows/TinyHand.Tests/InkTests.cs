@@ -195,3 +195,79 @@ public class InkGeometryTests
         Assert.InRange(InkGeometry.Distance(end, left), 15.0, 16.5);
     }
 }
+
+public class InkSmootherTests
+{
+    private const double Dt = 0.008; // 125 Hz mouse report rate
+
+    [Fact]
+    public void FirstPoint_IsReturnedUnchanged()
+    {
+        var smoother = new InkSmoother();
+        Assert.Equal(new Point(123, 456), smoother.Filter(new Point(123, 456), 0));
+    }
+
+    [Fact]
+    public void StationaryJitter_IsAttenuated()
+    {
+        var smoother = new InkSmoother();
+        smoother.Filter(new Point(100, 100), 0);
+        double t = 0;
+        int maxDeviation = 0;
+        for (int i = 0; i < 200; i++)
+        {
+            t += Dt;
+            // ±1 px hand jitter around a still pointer.
+            var raw = new Point(100 + (i % 2 == 0 ? 1 : -1), 100 + (i % 3 == 0 ? 1 : -1));
+            var filtered = smoother.Filter(raw, t);
+            maxDeviation = Math.Max(maxDeviation, Math.Abs(filtered.X - 100));
+            maxDeviation = Math.Max(maxDeviation, Math.Abs(filtered.Y - 100));
+        }
+        Assert.True(maxDeviation <= 1, $"jitter leaked through: {maxDeviation} px");
+    }
+
+    [Fact]
+    public void FastMovement_FollowsWithinAFewPixels()
+    {
+        var smoother = new InkSmoother();
+        smoother.Filter(new Point(100, 100), 0);
+        double t = 0;
+        int rawX = 100;
+        int filteredX = 100;
+        for (int i = 0; i < 60; i++)
+        {
+            t += Dt;
+            rawX += 20; // 2500 px/s
+            filteredX = smoother.Filter(new Point(rawX, 100), t).X;
+        }
+        Assert.InRange(rawX - filteredX, 0, 6);
+    }
+
+    [Fact]
+    public void SlowMovement_IsSmoothedButFollows()
+    {
+        var smoother = new InkSmoother();
+        smoother.Filter(new Point(100, 100), 0);
+        double t = 0;
+        int rawX = 100;
+        int filteredX = 100;
+        for (int i = 0; i < 100; i++)
+        {
+            t += Dt;
+            rawX += 1; // 125 px/s
+            filteredX = smoother.Filter(new Point(rawX, 100), t).X;
+            Assert.True(filteredX <= rawX, "the filter must not overshoot");
+        }
+        Assert.InRange(rawX - filteredX, 0, 5);
+    }
+
+    [Fact]
+    public void Reset_ForgetsThePreviousStroke()
+    {
+        var smoother = new InkSmoother();
+        smoother.Filter(new Point(0, 0), 0);
+        smoother.Filter(new Point(100, 100), Dt);
+        smoother.Reset();
+        Assert.Equal(new Point(500, 500), smoother.Filter(new Point(500, 500), 1));
+    }
+}
