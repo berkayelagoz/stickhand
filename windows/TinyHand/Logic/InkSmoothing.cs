@@ -13,10 +13,10 @@ namespace TinyHand.Logic;
 public sealed class InkSmoother
 {
     /// <summary>Cutoff at rest (Hz): lower = smoother, but slower to start moving.</summary>
-    public const double MinCutoff = 1.0;
+    public const double MinCutoff = 0.5;
 
     /// <summary>Speed coefficient (Hz per px/s): higher = more responsive at speed.</summary>
-    public const double Beta = 0.05;
+    public const double Beta = 0.03;
 
     /// <summary>Cutoff of the derivative low-pass (Hz): smooths the speed estimate.</summary>
     public const double DerivativeCutoff = 1.0;
