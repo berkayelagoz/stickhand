@@ -194,13 +194,14 @@ internal static class M3Check
         Check("draw click swallowed", _clicks == clicksBefore, $"clicks={_clicks} (was {clicksBefore})");
 
         // 8. Busy/idle pacing: 60 fps while the pointer moves, 20 fps once it rests.
-        // Two full seconds of movement so the last completed fps window is entirely busy.
+        // Two full seconds of movement so the last completed fps window is entirely busy; read
+        // it while the pointer is still moving (the idle transition starts 500 ms after the
+        // last input, so a post-move read would average busy and idle frames).
         for (int i = 0; i < 120; i++)
         {
             MoveTo(cx + (i % 20) * 4, cy - 200);
             Pump(20);
         }
-        Pump(1100);
         int busyFps = controller.CurrentFps;
         Check("busy fps", busyFps >= 50, $"fps={busyFps}");
         Pump(3000);

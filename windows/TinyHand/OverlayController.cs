@@ -165,6 +165,7 @@ public sealed class OverlayController : IDisposable
     private float _gripX;
     private bool _gripInit;
     private bool _gripSettling;
+    private long _lastPoseTs;
     private readonly TapSound _tapSound;
 
     private readonly Thread _thread;
@@ -398,6 +399,7 @@ public sealed class OverlayController : IDisposable
         _held = false;
         _gripInit = false;
         _gripSettling = false;
+        _lastPoseTs = 0;
         _styleDirty = true;
         ClearStrokes();
         RebuildOverlays();
@@ -603,6 +605,12 @@ public sealed class OverlayController : IDisposable
 
     private void AdvancePose()
     {
+        long now = Stopwatch.GetTimestamp();
+        float dt = _lastPoseTs == 0 ? 0 : (float)((now - _lastPoseTs) / (double)Stopwatch.Frequency);
+        _lastPoseTs = now;
+        // Clamp: a stalled frame must not teleport the grip, and the first frame snaps anyway.
+        dt = Math.Clamp(dt, 0.001f, 0.1f);
+
         var primary = _primaryMonitor;
         if (primary is not null)
         {
@@ -615,7 +623,7 @@ public sealed class OverlayController : IDisposable
             }
             else
             {
-                _gripX = HandPoseSolver.FollowGrip(_gripX, target);
+                _gripX = HandPoseSolver.FollowGrip(_gripX, target, dt);
             }
             _gripSettling = Math.Abs(target - _gripX) > 0.5f;
         }

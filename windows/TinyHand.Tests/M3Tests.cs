@@ -124,11 +124,27 @@ public class HandPoseTests
     }
 
     [Fact]
-    public void GripFollow_AndPressRelease_MatchTheMacOSFactors()
+    public void GripFollow_MatchesTheMacOSFactorAt120Hz()
     {
-        Assert.Equal(100 + (200 - 100) * 0.08f, HandPoseSolver.FollowGrip(100, 200), 3);
+        // One 120 Hz frame: the raw macOS factor.
+        Assert.Equal(100 + (200 - 100) * 0.08f, HandPoseSolver.FollowGrip(100, 200, 1f / 120f), 3);
+        // One 60 Hz frame: two 120 Hz steps, so the wall-clock response is the same.
+        Assert.Equal(100 + (200 - 100) * (1 - 0.92f * 0.92f), HandPoseSolver.FollowGrip(100, 200, 1f / 60f), 3);
         Assert.Equal(1f - 0.18f, HandPoseSolver.ReleasePress(1f), 3);
         Assert.Equal(0f, HandPoseSolver.ReleasePress(0f), 3);
+    }
+
+    [Fact]
+    public void GripFollow_IsFrameRateIndependent()
+    {
+        // 0.1 s of smoothing at 60 Hz and at 120 Hz must land on the same grip position.
+        float at60 = 100;
+        for (int i = 0; i < 6; i++) at60 = HandPoseSolver.FollowGrip(at60, 200, 1f / 60f);
+        float at120 = 100;
+        for (int i = 0; i < 12; i++) at120 = HandPoseSolver.FollowGrip(at120, 200, 1f / 120f);
+        Assert.Equal(at120, at60, 1);
+        // And it converges faster than the old fixed per-frame factor at 60 Hz.
+        Assert.True(at60 > 100 + (200 - 100) * 0.08f * 6, $"at60={at60}");
     }
 
     [Fact]
