@@ -89,8 +89,23 @@ internal static class InkCheck
         Pump(300);
         var arrowHead = Capture(cx + 60, cy + 308, 45, 14);
         Check("head with Ctrl", arrowHead.Dark > 0, $"dark={arrowHead.Dark}");
+        // The head must be an open V: the two lines start at the stroke end and must not be
+        // joined by a bar (the single-figure geometry bug drew one across the tips). The
+        // probe sits in the gap between the upper head line and the stroke body.
+        var headBar = Capture(cx + 64, cy + 292, 7, 2);
+        Check("head is open (no bar)", headBar.Dark <= 2, $"dark={headBar.Dark}");
+        if (Environment.GetEnvironmentVariable("TH_INKCHECK_DEBUG") == "1")
+            DumpRows(cx + 55, cy + 275, 55, 50);
 
-        // 3. Per-stroke fade: delay max(0.5, fadeSeconds) + 0.6 s, then the stroke is gone.
+        // 3. Hand tip: the measured fingertip must sit on the real cursor (the sprite used to
+        // be anchored by its top-centre, leaving the tip ~6 px left / ~14 px below).
+        MoveTo(cx, cy - 100);
+        Pump(300);
+        var tip = Capture(cx - 40, cy - 120, 80, 40);
+        Check("hand tip on cursor", Math.Abs(tip.TopRow - 20) <= 3 && Math.Abs(tip.TopCenterX - 40) <= 4,
+            $"topRow={tip.TopRow} (want 20) topCenterX={tip.TopCenterX} (want 40)");
+
+        // 4. Per-stroke fade: delay max(0.5, fadeSeconds) + 0.6 s, then the stroke is gone.
         if (InkFade.Keep(fade))
         {
             Pump(1500);
@@ -128,15 +143,17 @@ internal static class InkCheck
     private static bool Near(Color a, Color b, int tolerance) =>
         Math.Abs(a.R - b.R) <= tolerance && Math.Abs(a.G - b.G) <= tolerance && Math.Abs(a.B - b.B) <= tolerance;
 
-    private readonly record struct CaptureResult(int Dark, Color Dominant);
+    private readonly record struct CaptureResult(int Dark, Color Dominant, int TopRow, int TopCenterX);
 
-    /// <summary>Screen pixels in the rect that are dark (ink), plus the most common dark colour.</summary>
+    /// <summary>Screen pixels in the rect that are dark (ink/hand), the most common dark
+    /// colour, and the topmost dark row with its x-centre (hand-tip alignment check).</summary>
     private static CaptureResult Capture(int x, int y, int width, int height)
     {
         using var bitmap = new Bitmap(width, height);
         using (var g = Graphics.FromImage(bitmap)) g.CopyFromScreen(x, y, 0, 0, new Size(width, height));
 
         int dark = 0;
+        int topRow = -1, topLo = -1, topHi = -1;
         var counts = new Dictionary<int, int>();
         for (int py = 0; py < height; py++)
         {
@@ -145,6 +162,12 @@ internal static class InkCheck
                 var c = bitmap.GetPixel(px, py);
                 if (c.R >= 100 || c.G >= 100 || c.B >= 100) continue;
                 dark++;
+                if (topRow < 0) topRow = py;
+                if (py == topRow)
+                {
+                    if (topLo < 0) topLo = px;
+                    topHi = px;
+                }
                 int key = (c.R << 16) | (c.G << 8) | c.B;
                 counts[key] = counts.GetValueOrDefault(key) + 1;
             }
@@ -156,7 +179,8 @@ internal static class InkCheck
             var best = counts.MaxBy(kv => kv.Value);
             dominant = Color.FromArgb((best.Key >> 16) & 0xFF, (best.Key >> 8) & 0xFF, best.Key & 0xFF);
         }
-        return new CaptureResult(dark, dominant);
+        int topCenterX = topRow < 0 ? -1 : (topLo + topHi) / 2;
+        return new CaptureResult(dark, dominant, topRow, topCenterX);
     }
 
     /// <summary>Debug: dark pixels per row of a capture (TH_INKCHECK_DEBUG=1).</summary>

@@ -117,8 +117,11 @@ public sealed class InkLayer : IDisposable
         public required long EndTimestamp { get; init; }
     }
 
-    /// <summary>One smoothed-path piece: a quad curve (control point) or a straight line.</summary>
-    private readonly record struct InkSegment(Point Start, Point Control, Point End, bool IsLine);
+    /// <summary>One smoothed-path piece: a quad curve (control point) or a straight line.
+    /// <see cref="NewFigure"/> forces a separate subpath (the two arrow-head lines both start
+    /// at the stroke end; continuing one figure would draw a bar between them).</summary>
+    private readonly record struct InkSegment(Point Start, Point Control, Point End, bool IsLine,
+        bool NewFigure = false);
 
     private readonly ID2D1DeviceContext _ctx;
     private readonly ID2D1Bitmap1 _live;
@@ -338,8 +341,8 @@ public sealed class InkLayer : IDisposable
 
         if (arrow && InkGeometry.TryHead(_points, _width, _scale, out var end, out var left, out var right))
         {
-            batch.Add(new InkSegment(end, default, left, true));
-            batch.Add(new InkSegment(end, default, right, true));
+            batch.Add(new InkSegment(end, default, left, true, NewFigure: true));
+            batch.Add(new InkSegment(end, default, right, true, NewFigure: true));
             ExpandLiveBounds(left);
             ExpandLiveBounds(right);
         }
@@ -363,10 +366,14 @@ public sealed class InkLayer : IDisposable
         var geometry = _factory.CreatePathGeometry();
         using var sink = geometry.Open();
         bool open = false;
+        Point current = default;
         foreach (var segment in segments)
         {
-            if (!open)
+            // Disjoint pieces need their own figure; continuing the previous one would
+            // connect them with an extra line (the arrow-head bar bug).
+            if (!open || segment.NewFigure || segment.Start != current)
             {
+                if (open) sink.EndFigure(FigureEnd.Open);
                 sink.BeginFigure(ToLocal(segment.Start), FigureBegin.Filled);
                 open = true;
             }
@@ -376,6 +383,7 @@ public sealed class InkLayer : IDisposable
                 Point1 = ToLocal(segment.Control),
                 Point2 = ToLocal(segment.End),
             });
+            current = segment.End;
         }
         if (open) sink.EndFigure(FigureEnd.Open);
         sink.Close();

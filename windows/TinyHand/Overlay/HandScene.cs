@@ -50,13 +50,17 @@ public sealed class HandScene
     /// compare present cost against the transparent clear.</summary>
     public static bool OpaqueBackground;
 
-    // Hand asset is 1024x1536 (portrait, fingertip up). M1 anchors the fingertip at the
-    // cursor; per-style tip/tipX factors from macOS PointerStyle are ported in M4.
+    // Hand asset is 1024x1536 (portrait, fingertip up). The fingertip is measured from the
+    // asset (macOS HandAsset.measure) and anchored at the cursor, so the hand tip sits
+    // exactly on the real pointer instead of the sprite's top-centre.
     private const int HandHeightPx = 200;
-    private const float TipAnchorX = 0.5f;
+
+    /// <summary>Decoded hand sprite plus its measured fingertip anchor (fractions of the
+    /// sprite size). macOS measures the same values per style in PointerStyle.measure.</summary>
+    private sealed record HandAsset(Bitmap Bitmap, float TipX, float TipY);
 
     // Asset decode + prescale stay on System.Drawing (load-time only, per scale).
-    private static readonly Lazy<Bitmap> Hand = new(LoadHand);
+    private static readonly Lazy<HandAsset> Hand = new(LoadHand);
 
     private static readonly Lazy<IDWriteFactory> Write = new(
         () => DWriteApi.DWriteCreateFactory<IDWriteFactory>(DWriteFactoryType.Shared));
@@ -66,21 +70,67 @@ public sealed class HandScene
     private static readonly object FormatLock = new();
     private static readonly Dictionary<(TextKind, int), IDWriteTextFormat> Formats = new();
 
-    private static Bitmap LoadHand()
+    private static HandAsset LoadHand()
     {
         var asm = typeof(HandScene).Assembly;
         using var stream = asm.GetManifestResourceStream("TinyHand.assets.hand_black.png")
             ?? throw new InvalidOperationException("Embedded hand_black.png not found");
-        return new Bitmap(stream);
+        var bitmap = new Bitmap(stream);
+        var (tipX, tipY) = MeasureTip(bitmap);
+        return new HandAsset(bitmap, tipX, tipY);
     }
+
+    /// <summary>macOS <c>HandAsset.measure</c>: the fingertip is the topmost opaque row; its x
+    /// is the centre of that row's extent <c>h/200</c> rows lower. Anchoring this point at the
+    /// cursor is what makes the hand tip sit on the real pointer.</summary>
+    private static (float TipX, float TipY) MeasureTip(Bitmap bitmap)
+    {
+        var data = bitmap.LockBits(new Rectangle(Point.Empty, bitmap.Size), ImageLockMode.ReadOnly,
+            System.Drawing.Imaging.PixelFormat.Format32bppArgb);
+        try
+        {
+            int w = bitmap.Width;
+            int h = bitmap.Height;
+            int top = -1;
+            for (int y = 0; y < h && top < 0; y++)
+            {
+                for (int x = 0; x < w; x++)
+                {
+                    if (AlphaAt(data, x, y) <= 128) continue;
+                    top = y;
+                    break;
+                }
+            }
+            if (top < 0) return (0.5f, 0f);
+
+            int row = Math.Min(h - 1, top + h / 200);
+            int lo = -1, hi = -1;
+            for (int x = 0; x < w; x++)
+            {
+                if (AlphaAt(data, x, row) <= 128) continue;
+                if (lo < 0) lo = x;
+                hi = x;
+            }
+            float tipX = lo < 0 ? 0.5f : (lo + hi) / 2f / w;
+            return (tipX, (float)top / h);
+        }
+        finally
+        {
+            bitmap.UnlockBits(data);
+        }
+    }
+
+    private static byte AlphaAt(BitmapData data, int x, int y) =>
+        Marshal.ReadByte(data.Scan0, y * data.Stride + x * 4 + 3);
 
     /// <summary>Screen-space destination rect of the hand sprite for the given cursor and scale.</summary>
     public static Rectangle HandRect(Point cursor, int scale)
     {
+        var hand = Hand.Value;
         int h = HandHeightPx * scale;
-        float w = h * (Hand.Value.Width / (float)Hand.Value.Height);
-        float x = cursor.X - w * TipAnchorX;
-        float y = cursor.Y - 8 * scale;
+        float w = h * (hand.Bitmap.Width / (float)hand.Bitmap.Height);
+        float x = cursor.X - w * hand.TipX;
+        float y = cursor.Y - h * hand.TipY;
         // +1 px to cover filtering edge bleed.
         return Rectangle.Round(new RectangleF(x - 1, y - 1, w + 2, h + 2));
     }
@@ -123,14 +173,15 @@ public sealed class HandScene
 
         private ID2D1Bitmap1 BuildHandBitmap(int scale)
         {
+            var asset = Hand.Value;
             int h = HandHeightPx * scale;
-            int w = (int)Math.Round(h * (Hand.Value.Width / (float)Hand.Value.Height));
+            int w = (int)Math.Round(h * (asset.Bitmap.Width / (float)asset.Bitmap.Height));
             using var prescaled = new Bitmap(w, h, System.Drawing.Imaging.PixelFormat.Format32bppArgb);
             using (var g = Graphics.FromImage(prescaled))
             {
                 g.InterpolationMode = System.Drawing.Drawing2D.InterpolationMode.HighQualityBicubic;
                 g.PixelOffsetMode = System.Drawing.Drawing2D.PixelOffsetMode.Half;
-                g.DrawImage(Hand.Value, 0, 0, w, h);
+                g.DrawImage(asset.Bitmap, 0, 0, w, h);
             }
             var (bytes, pitch) = PremultipliedBytes(prescaled);
             var props = new BitmapProperties1
@@ -295,8 +346,9 @@ public sealed class HandScene
         var hand = res.HandBitmap(scale);
         float h = hand.Size.Height;
         float w = hand.Size.Width;
-        float x = scene.Cursor.X + ox - w * TipAnchorX;
-        float y = scene.Cursor.Y + oy - 8 * scale; // fingertip sits at the cursor point
+        // Measured fingertip anchored at the cursor (macOS HandAsset.tip/tipX).
+        float x = scene.Cursor.X + ox - w * Hand.Value.TipX;
+        float y = scene.Cursor.Y + oy - h * Hand.Value.TipY;
 
         ctx.DrawBitmap(hand, new Rect(x, y, w, h), 1f, BitmapInterpolationMode.Linear, new Rect(0, 0, w, h));
     }
