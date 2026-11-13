@@ -454,7 +454,12 @@ public sealed class HandScene
         ctx.Transform = Matrix3x2.Identity;
     }
 
-    /// <summary>Blit the shadow (hand part + stem part) with the current transform.</summary>
+    /// <summary>
+    /// Blit the shadow (hand part + stem part) with the current transform. Each part is
+    /// expanded by the sprite padding only *away* from the wrist seam: expanding both sides
+    /// made the two rects overlap and the shadow was drawn twice there, which read as two
+    /// stacked shadows when the hand rested.
+    /// </summary>
     private static void DrawShadow(ID2D1DeviceContext ctx, SceneResources.ShadowTarget shadow,
         float opacity, HandMetrics metrics, HandPose pose)
     {
@@ -462,25 +467,35 @@ public sealed class HandScene
         float pad = shadow.Padding;
         float sw = shadow.Bitmap.Size.Width - 2 * pad;
         float sh = shadow.Bitmap.Size.Height - 2 * pad;
-        var (handSource, handDest) = ShadowPart(pad, sw, sh,
-            metrics.HandTop * sh, metrics.HandSpan * sh, 0, pose.HandLength, pose.Width);
-        var (rodSource, rodDest) = ShadowPart(pad, sw, sh,
-            metrics.Wrist * sh, metrics.RodSpan * sh, pose.HandLength, pose.RodLength, pose.Width);
-        ctx.DrawBitmap(shadow.Bitmap, handDest, opacity, BitmapInterpolationMode.Linear, handSource);
-        ctx.DrawBitmap(shadow.Bitmap, rodDest, opacity, BitmapInterpolationMode.Linear, rodSource);
+        float sx = pose.Width / sw;
+        float handSy = pose.HandLength / (metrics.HandSpan * sh);
+        float rodSy = pose.RodLength / (metrics.RodSpan * sh);
+
+        // Hand part: padding above/left/right, exact bottom at the wrist.
+        var handSource = new Rect(0, metrics.HandTop * sh, sw + 2 * pad, metrics.HandSpan * sh + pad);
+        var handDest = new Rect(-pad * sx, -pad * handSy, pose.Width + 2 * pad * sx,
+            pose.HandLength + pad * handSy);
+        // Stem part: padding below/left/right, exact top at the wrist.
+        var rodSource = new Rect(0, pad + metrics.Wrist * sh, sw + 2 * pad, metrics.RodSpan * sh + pad);
+        var rodDest = new Rect(-pad * sx, pose.HandLength, pose.Width + 2 * pad * sx,
+            pose.RodLength + pad * rodSy);
+
+        // The resting shadow is a little larger than the pressed one; scale both parts around
+        // the hand's centre so the seam stays aligned.
+        float scale = pose.ShadowScale;
+        float cx = pose.Width / 2;
+        float cy = pose.HandLength / 2;
+        ctx.DrawBitmap(shadow.Bitmap, ScaleAround(handDest, cx, cy, scale), opacity,
+            BitmapInterpolationMode.Linear, handSource);
+        ctx.DrawBitmap(shadow.Bitmap, ScaleAround(rodDest, cx, cy, scale), opacity,
+            BitmapInterpolationMode.Linear, rodSource);
     }
 
-    /// <summary>Source/destination rects for one shadow part, expanded by the sprite padding so
-    /// the blurred spill outside the part is included.</summary>
-    private static (Rect Source, Rect Dest) ShadowPart(float pad, float sw, float sh,
-        float sourceY, float sourceHeight, float destY, float destHeight, float width)
-    {
-        float sx = width / sw;
-        float sy = destHeight / sourceHeight;
-        return (
-            new Rect(0, sourceY, sw + 2 * pad, sourceHeight + 2 * pad),
-            new Rect(-pad * sx, destY - pad * sy, width + 2 * pad * sx, destHeight + 2 * pad * sy));
-    }
+    private static Rect ScaleAround(Rect rect, float cx, float cy, float scale) => new(
+        cx + (rect.X - cx) * scale,
+        cy + (rect.Y - cy) * scale,
+        rect.Width * scale,
+        rect.Height * scale);
 
     /// <summary>macOS <c>ArmView.aimLaser</c>: a red dot with a soft glow and a light core.</summary>
     private static void DrawLaser(ID2D1DeviceContext ctx, SceneResources res, MonitorInfo monitor,

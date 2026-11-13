@@ -13,6 +13,7 @@ public sealed record HandPose(
     float Lift,
     float ShadowDx,
     float ShadowDy,
+    float ShadowScale,
     float ShadowOpacity,
     PointF Tip)
 {
@@ -73,6 +74,15 @@ public static class HandPoseSolver
     /// <summary><c>ArmView.aim</c>: <c>pressAmount += (0 − pressAmount) × 0.18</c> per frame.</summary>
     public const float PressReleaseFollow = 0.18f;
 
+    /// <summary>Resting shadow is 8 % larger than the pressed one (Windows tuning).</summary>
+    public const float ShadowRestScale = 0.08f;
+
+    /// <summary>Resting shadow opacity; the press adds <see cref="ShadowPressOpacity"/>.</summary>
+    public const float ShadowRestOpacity = 0.20f;
+
+    /// <summary>Opacity added at full press (0.20 → 0.28).</summary>
+    public const float ShadowPressOpacity = 0.08f;
+
     /// <summary>Grip x target for a cursor position (macOS clamps to 15 %..105 % of the width).</summary>
     public static float GripTargetX(float cursorX, Rectangle monitor)
     {
@@ -126,7 +136,10 @@ public static class HandPoseSolver
         // rotation: the shadow keeps a fixed screen-space direction (down-right).
         float shadowDx = lift * 0.6f;
         float shadowDy = lift;
-        float shadowOpacity = showShadow ? 0.26f + 0.02f * press : 0;
+        // The resting hand floats high: its shadow is a little larger and more transparent
+        // than the pressed one (user request, 14 Kasım 2026), so the lift reads as height.
+        float shadowScale = 1 + ShadowRestScale * (1 - press);
+        float shadowOpacity = showShadow ? ShadowRestOpacity + ShadowPressOpacity * press : 0;
 
         float cos = MathF.Cos(rotation);
         float sin = MathF.Sin(rotation);
@@ -144,6 +157,7 @@ public static class HandPoseSolver
             Lift: lift,
             ShadowDx: shadowDx,
             ShadowDy: shadowDy,
+            ShadowScale: shadowScale,
             ShadowOpacity: shadowOpacity,
             Tip: tip);
     }

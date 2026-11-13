@@ -95,10 +95,12 @@ public class HandPoseTests
         var rest = HandPoseSolver.Solve(cursor, Monitor, Metrics, 0, gripX, true);
         var pressed = HandPoseSolver.Solve(cursor, Monitor, Metrics, 1, gripX, true);
 
-        // macOS: opacity 0.26 + 0.02 × press; the blur is the tight full-press radius at every
-        // lift (Windows tuning), so only the offset and the opacity animate.
-        Assert.Equal(0.26f, rest.ShadowOpacity, 3);
+        // Windows tuning: the resting shadow is 8 % larger and more transparent (0.20) than
+        // the pressed one (0.28); the blur is the tight full-press radius at every lift.
+        Assert.Equal(0.20f, rest.ShadowOpacity, 3);
         Assert.Equal(0.28f, pressed.ShadowOpacity, 3);
+        Assert.Equal(1.08f, rest.ShadowScale, 3);
+        Assert.Equal(1f, pressed.ShadowScale, 3);
         // Offset is a fixed screen-space direction (down-right), scaled by the lift.
         Assert.Equal(rest.Lift * 0.6f, rest.ShadowDx, 1);
         Assert.Equal(rest.Lift, rest.ShadowDy, 1);
