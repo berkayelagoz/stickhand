@@ -106,10 +106,10 @@ windows/
 
 Geliştirme makinesi (Windows 11 x64 — hedef işletim sistemi yalnızca Windows 11 x64'dür, Windows 10 desteklenmez):
 
-- [ ] .NET 10 SDK (`winget install Microsoft.DotNet.SDK.10`; WindowsDesktop/WinForms iş yükünü içerir) — runtime tek başına yeterli değildir
-- [ ] Git (kurulu)
-- [ ] `dotnet --list-sdks` çıktısında .NET 10 SDK göründüğünü doğrula
-- [ ] İlk `dotnet build` doğrulaması çözüm iskeleti oluşturulduktan sonra yapılır (aşağıdaki ilk M1 görevi); iskelet yokken build kontrolü anlamsızdır
+- [x] .NET 10 SDK (`winget install Microsoft.DotNet.SDK.10`; WindowsDesktop/WinForms iş yükünü içerir) — runtime tek başına yeterli değildir *(kurulu, 10.0.404 — 12 Kasım 2026)*
+- [x] Git (kurulu) *(12 Kasım 2026)*
+- [x] `dotnet --list-sdks` çıktısında .NET 10 SDK göründüğünü doğrula *(12 Kasım 2026)*
+- [x] İlk `dotnet build` doğrulaması çözüm iskeleti oluşturulduktan sonra yapılır (aşağıdaki ilk M1 görevi); iskelet yokken build kontrolü anlamsızdır *(başarılı; 18 birim testi geçti — 12 Kasım 2026)*
 
 Kurulumsuz kalanlar:
 
@@ -121,19 +121,19 @@ Kurulumsuz kalanlar:
 
 M1 görevleri:
 
-- [ ] Çözüm iskeleti (sln, 3 proje, `global.json`), CI'da build → ilk `dotnet build` kontrolü bu görevle yapılır
-- [ ] Girdi/imleç prototipi (tek prototipte birlikte):
+- [x] Çözüm iskeleti (sln, 3 proje, `global.json`), CI'da build → ilk `dotnet build` kontrolü bu görevle yapılır *(12 Kasım 2026; `build-windows` CI işi eklendi; kayıt PROGRESS.md M1)*
+- [x] Girdi/imleç prototipi (tek prototipte birlikte) *(12 Kasım 2026; alt maddelerin tamamı `scripts/e2e-m1.ps1` ile otomatik doğrulandı — 10/10; ayrıntılar PROGRESS.md M1)*:
   - `WH_MOUSE_LL`: aktifken tıklamayı yut; kendi `SendInput` olayları `dwExtraInfo` imzasıyla ayıklanır (`LLMHF_INJECTED` başka süreçler için de set olur, tek başına ölçüt değil); hook'lar ayrı mesaj döngülü iş parçacığında
-  - Overlay: monitör başına layered window, imleç konumunda el çizimi
+  - Overlay: monitör başına layered window, imleç konumunda el çizimi *(M1.5'te DirectComposition'a taşındı)*
   - Çizim sırasında alttaki uygulama tıklanmaz; toolbar bölgesi hit-test → komut hook'tan iletilir
   - Çift Shift → alttaki uygulamaya tıklama (click-through); tıklama, elin **opak** piksellerinin üzerinde de hedef uygulamaya gider (yalnızca hook'un olayı bırakması yetmez — hit-test de geçmeli)
   - Fare basılıyken mod değişirse down ve up olayları aynı pencereye gider
-  - Esc → temizle + kapat + gerçek imlecin geri gelmesi; gerçek imleç aktifken `WM_SETCURSOR` ile gizli
-- [ ] Hook yaşam döngüsü: ayrı mesaj döngüsünün çalıştığı, callback süresinin ölçüldüğü ve kapatıp açınca hook'ların yeniden kurulduğu doğrulanır
-- [ ] Spike: 4K fullscreen `UpdateLayeredWindow` @120 Hz — GDI+ önce mevcut makinede denenir (görüntülenen kare hızı, p95 kare süresi, CPU kullanımı kaydedilir); takılma/yüksek CPU varsa kirli bölge (`UpdateLayeredWindowIndirect`) ölçülür; DirectComposition kararı sonuca bırakılır
-- [ ] Tray simgesi + aç/kapa menüsü (Ctrl+Alt+H)
-- [ ] Test matrisi: normal çizim, toolbar tıklaması, çift Shift ile alttaki uygulamaya tıklama (elin opak kısmı dahil), fare basılıyken mod değişimi (down/up aynı pencereye), Esc ile imleç dönüşü; farklı DPI'lı iki monitör arasında geçiş; ekran kilidi (Win+L) sonrası overlay/imleç/hook davranışı
-- **Çıkış kriteri (prototip başarı ölçütü):** TinyHand eli görünüyor; çizim tıklaması alta sızmıyor; çift Shift'te tıklama alttaki uygulamaya ulaşıyor; Esc gerçek imleci geri getiriyor. Ek doğrulamalar: Ctrl+Alt+H ile açılıp kapanıyor, hook kapatıp açınca yeniden kuruluyor, test matrisi (opak piksel, down/up, farklı DPI'lı monitör geçişi, ekran kilidi) geçiyor; spike ölçümleri ve render kararı PROGRESS.md'de kayıtlı.
+  - Esc → temizle + kapat + gerçek imlecin geri gelmesi; gerçek imleç aktifken `WM_SETCURSOR` ile gizli *(imleç görünürlüğü `scripts/cursorcheck-m1.ps1` ile otomatik doğrulandı — 7/7)*
+- [x] Hook yaşam döngüsü: ayrı mesaj döngüsünün çalıştığı, callback süresinin ölçüldüğü ve kapatıp açınca hook'ların yeniden kurulduğu doğrulanır *(12 Kasım 2026; `--hookcheck`)*
+- [x] Spike: 4K fullscreen `UpdateLayeredWindow` @120 Hz — GDI+ önce mevcut makinede denenir (görüntülenen kare hızı, p95 kare süresi, CPU kullanımı kaydedilir); takılma/yüksek CPU varsa kirli bölge (`UpdateLayeredWindowIndirect`) ölçülür; DirectComposition kararı sonuca bırakılır *(12 Kasım 2026; ölçümler PROGRESS.md'de; sonuç → M1.5 kararı)*
+- [x] Tray simgesi + aç/kapa menüsü (Ctrl+Alt+H) *(12 Kasım 2026)*
+- [x] Test matrisi: normal çizim, toolbar tıklaması, çift Shift ile alttaki uygulamaya tıklama (elin opak kısmı dahil), fare basılıyken mod değişimi (down/up aynı pencereye), Esc ile imleç dönüşü; farklı DPI'lı iki monitör arasında geçiş; ekran kilidi (Win+L) sonrası overlay/imleç/hook davranışı *(ilk 5 madde + imleç görünürlüğü otomatik doğrulandı: e2e 10/10, cursorcheck 7/7 — 12 Kasım 2026; **çift-DPI ve Win+L donanım gerektiriyor, M5'in çok monitör test geçişine taşındı**)*
+- **Çıkış kriteri (karşılandı, 12 Kasım 2026):** TinyHand eli görünüyor; çizim tıklaması alta sızmıyor; çift Shift'te tıklama alttaki uygulamaya ulaşıyor; Esc gerçek imleci geri getiriyor. Ek doğrulamalar: Ctrl+Alt+H ile açılıp kapanıyor, hook kapatıp açınca yeniden kuruluyor, test matrisi (opak piksel, down/up, farklı DPI'lı monitör geçişi, ekran kilidi) geçiyor *(çift-DPI ve Win+L hariç — M5'e taşındı)*; spike ölçümleri ve render kararı PROGRESS.md'de kayıtlı.
 
 ### M1.5 — Render yüzeyi geçişi (Direct2D + DirectComposition)
 Karar gereği M2'den önce uygulanır; gerekçe spike bölümündeki sonuç notu (ULW/ULWI present bloklaması ölçümleri). Girdi/imleç/hook katmanı ve kompozisyon döngüsü mimarisi değişmez; yalnız boyama ve sunum değişir (tek render sınıfı sınırları içinde).
