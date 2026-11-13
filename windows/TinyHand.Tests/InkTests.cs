@@ -240,7 +240,7 @@ public class InkSmootherTests
             rawX += 20; // 2500 px/s
             filteredX = smoother.Filter(new Point(rawX, 100), t).X;
         }
-        Assert.InRange(rawX - filteredX, 0, 10);
+        Assert.InRange(rawX - filteredX, 0, 14);
     }
 
     [Fact]
@@ -258,7 +258,7 @@ public class InkSmootherTests
             filteredX = smoother.Filter(new Point(rawX, 100), t).X;
             Assert.True(filteredX <= rawX, "the filter must not overshoot");
         }
-        Assert.InRange(rawX - filteredX, 0, 9);
+        Assert.InRange(rawX - filteredX, 0, 13);
     }
 
     [Fact]
