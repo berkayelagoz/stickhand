@@ -52,9 +52,9 @@ public static class InkPalette
 }
 
 /// <summary>
-/// macOS <c>PointerStyle</c> table: id, title and ink colour per built-in hand. The Windows
-/// toolbar that exposes all 36 styles is M3; the table is ported now because the M2 ink
-/// colour contract resolves through it.
+/// macOS <c>PointerStyle</c> table: id, title and ink colour per built-in hand. The M3
+/// toolbar exposes all 36 styles plus the laser dot; the ink colour contract resolves
+/// through the same table.
 /// </summary>
 public sealed record PointerStyle(string Id, string Title, Color Ink)
 {
@@ -107,11 +107,23 @@ public sealed record PointerStyle(string Id, string Title, Color Ink)
     ];
 
     /// <summary>
-    /// The style the M1/M1.5 prototype draws: <c>hand_black.png</c> is the macOS "Midnight"
-    /// asset, so <see cref="InkChoice.Match"/> resolves to #1D1D21. M3 replaces this with the
-    /// selected style (macOS default: lavender → #8754F2).
+    /// The style the M1/M1.5 prototype drew: <c>hand_black.png</c> is the macOS "Midnight"
+    /// asset, so <see cref="InkChoice.Match"/> resolved to #1D1D21. M3 selects the style from
+    /// the toolbar; the macOS default is lavender (#8754F2).
     /// </summary>
-    public static PointerStyle Current { get; } = Black;
+    public static PointerStyle Default => Lavender;
+
+    /// <summary>True for the laser dot: no hand sprite, a glowing red dot at the pointer.</summary>
+    public bool IsLaser => Id == Laser.Id;
+
+    /// <summary>Embedded sprite name (<c>hand_lavender</c>), null for the laser.</summary>
+    public string? AssetName => IsLaser ? null : $"hand_{Id}";
+
+    /// <summary>All 36 built-in hands plus the laser dot, in the macOS toolbar order.</summary>
+    public static IReadOnlyList<PointerStyle> All { get; } = [.. BuiltIn, Laser];
+
+    public static PointerStyle ById(string id) =>
+        All.FirstOrDefault(style => style.Id == id) ?? Default;
 }
 
 /// <summary>macOS <c>ArmView.inkWidth</c> / <c>Ink.addHead</c> / <c>Ink.extend</c> metrics.</summary>
@@ -260,14 +272,30 @@ public static class InkGeometry
 }
 
 /// <summary>
-/// M2 preference values. The settings window and persistence are M4; until then the macOS
-/// defaults apply, <c>TH_FADE</c> overrides the initial fade for diagnostics
-/// (<c>TH_FADE=0</c> keeps ink forever, like <c>Preferences.fadeSeconds ≤ 0</c>) and
-/// Ctrl+Alt+F toggles the fade at runtime.
+/// macOS <c>Preferences.InteractKey</c>: the key held down for a temporary click-through.
+/// macOS defaults to ⌥ Option; the Windows mapping is Alt (⌘ → Ctrl, ⌃ → Shift).
+/// </summary>
+public enum InteractKey
+{
+    Alt,
+    Ctrl,
+    Shift,
+    Off,
+}
+
+/// <summary>
+/// M2/M3 preference values. The settings window and persistence are M4; until then the macOS
+/// defaults apply, environment variables override the initial values for diagnostics
+/// (<c>TH_FADE=0</c> keeps ink forever, <c>TH_STYLE=laser</c>, <c>TH_INTERACT=off</c>,
+/// <c>TH_KEEPS_HAND=1</c>, <c>TH_SOUND=0</c>, <c>TH_TAPSOUND=click</c>) and the hotkeys /
+/// toolbar change them at runtime.
 /// </summary>
 public static class Preferences
 {
     public const double DefaultFadeSeconds = 3;
+
+    /// <summary>macOS <c>Preferences.pointerSize</c> default (hand length as a screen fraction).</summary>
+    public const float DefaultPointerSize = 0.13f;
 
     private static double _fadeSeconds = ReadFadeSeconds();
 
@@ -289,6 +317,80 @@ public static class Preferences
         set => Volatile.Write(ref _smoothingLevel, (int)value);
     }
 
+    private static PointerStyle _style = ReadStyle();
+
+    /// <summary>Selected pointer style (toolbar pick). The ink colour follows it in
+    /// <see cref="InkChoice.Match"/> mode.</summary>
+    public static PointerStyle Style
+    {
+        get => Volatile.Read(ref _style);
+        set => Volatile.Write(ref _style, value);
+    }
+
+    private static float _pointerSize = ReadFloat("TH_POINTER_SIZE", DefaultPointerSize);
+
+    /// <summary>Hand length as a fraction of the screen height (macOS 0.08…0.20).</summary>
+    public static float PointerSize
+    {
+        get => Volatile.Read(ref _pointerSize);
+        set => Volatile.Write(ref _pointerSize, Math.Clamp(value, 0.08f, 0.20f));
+    }
+
+    private static int _showShadow = ReadFlag("TH_SHADOW", true) ? 1 : 0;
+
+    /// <summary>Draw the hand's drop shadow (macOS <c>Preferences.showShadow</c>).</summary>
+    public static bool ShowShadow
+    {
+        get => Volatile.Read(ref _showShadow) != 0;
+        set => Volatile.Write(ref _showShadow, value ? 1 : 0);
+    }
+
+    private static int _interactKey = (int)ReadInteractKey();
+
+    /// <summary>Key held for a temporary click-through (macOS ⌥ Option → Alt).</summary>
+    public static InteractKey InteractKey
+    {
+        get => (InteractKey)Volatile.Read(ref _interactKey);
+        set => Volatile.Write(ref _interactKey, (int)value);
+    }
+
+    private static int _interactKeepsHand = ReadFlag("TH_KEEPS_HAND", false) ? 1 : 0;
+
+    /// <summary>macOS <c>interactKeepsHand</c>: true keeps the hand visible while the interact
+    /// key is held; false (default) shows the real cursor and hides the hand.</summary>
+    public static bool InteractKeepsHand
+    {
+        get => Volatile.Read(ref _interactKeepsHand) != 0;
+        set => Volatile.Write(ref _interactKeepsHand, value ? 1 : 0);
+    }
+
+    private static int _soundOn = ReadFlag("TH_SOUND", true) ? 1 : 0;
+
+    /// <summary>Tap sound on/off (toolbar speaker button).</summary>
+    public static bool SoundOn
+    {
+        get => Volatile.Read(ref _soundOn) != 0;
+        set => Volatile.Write(ref _soundOn, value ? 1 : 0);
+    }
+
+    private static int _doubleShiftClickThrough = ReadFlag("TH_DOUBLE_SHIFT", true) ? 1 : 0;
+
+    /// <summary>macOS <c>doubleShiftClickThrough</c>: double-tapping Shift latches click-through.</summary>
+    public static bool DoubleShiftClickThrough
+    {
+        get => Volatile.Read(ref _doubleShiftClickThrough) != 0;
+        set => Volatile.Write(ref _doubleShiftClickThrough, value ? 1 : 0);
+    }
+
+    private static int _tapSound = (int)ReadTapSound();
+
+    /// <summary>Tap sound choice (macOS <c>Preferences.tapSound</c>, default thock).</summary>
+    public static TapSoundChoice TapSound
+    {
+        get => (TapSoundChoice)Volatile.Read(ref _tapSound);
+        set => Volatile.Write(ref _tapSound, (int)value);
+    }
+
     private static double ReadFadeSeconds()
     {
         string? raw = Environment.GetEnvironmentVariable("TH_FADE");
@@ -296,5 +398,47 @@ public static class Preferences
             System.Globalization.CultureInfo.InvariantCulture, out double value)
             ? value
             : DefaultFadeSeconds;
+    }
+
+    private static float ReadFloat(string name, float fallback)
+    {
+        string? raw = Environment.GetEnvironmentVariable(name);
+        return float.TryParse(raw, System.Globalization.NumberStyles.Float,
+            System.Globalization.CultureInfo.InvariantCulture, out float value)
+            ? value
+            : fallback;
+    }
+
+    private static bool ReadFlag(string name, bool fallback)
+    {
+        string? raw = Environment.GetEnvironmentVariable(name);
+        if (string.IsNullOrEmpty(raw)) return fallback;
+        return raw is not ("0" or "false" or "off");
+    }
+
+    private static PointerStyle ReadStyle()
+    {
+        string? raw = Environment.GetEnvironmentVariable("TH_STYLE");
+        return string.IsNullOrEmpty(raw) ? PointerStyle.Default : PointerStyle.ById(raw);
+    }
+
+    private static InteractKey ReadInteractKey()
+    {
+        string? raw = Environment.GetEnvironmentVariable("TH_INTERACT");
+        return raw?.ToLowerInvariant() switch
+        {
+            "off" or "none" => InteractKey.Off,
+            "ctrl" or "control" => InteractKey.Ctrl,
+            "shift" => InteractKey.Shift,
+            _ => InteractKey.Alt,
+        };
+    }
+
+    private static TapSoundChoice ReadTapSound()
+    {
+        string? raw = Environment.GetEnvironmentVariable("TH_TAPSOUND");
+        return Enum.TryParse<TapSoundChoice>(raw, ignoreCase: true, out var choice)
+            ? choice
+            : TapSoundChoice.Thock;
     }
 }

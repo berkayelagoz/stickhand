@@ -16,7 +16,7 @@ namespace TinyHand;
 /// - Drawing mode: hook swallows button events; moves pass and hit the overlay
 ///   (WS_EX_NOREDIRECTIONBITMAP windows hit-test by their full rect) so
 ///   WM_SETCURSOR blank-cursors the real cursor.
-/// - Click-through mode (double Shift / toolbar): WS_EX_TRANSPARENT removes the
+/// - Click-through mode (double Shift / interact key): WS_EX_TRANSPARENT removes the
 ///   overlay from hit-testing (also over opaque hand pixels); hook passes
 ///   everything; the real cursor is hidden globally via SetSystemCursor with
 ///   save/restore (contract: hand stays visible, real cursor stays hidden). The
@@ -26,6 +26,11 @@ namespace TinyHand;
 ///   mouse button is held at toggle time, the style flip is deferred to the Up
 ///   event: flipping hit-testing mid-drag lets the app below re-assert its cached
 ///   (non-blank) cursor handle, which kept the real cursor visible while dragging.
+/// - Interact key (M3, macOS ⌥ → Alt): while held, clicks pass through and — unless
+///   <see cref="Preferences.InteractKeepsHand"/> — the hand is hidden and the real
+///   cursor comes back. Alt alone is required: Ctrl+Alt is the app's hotkey prefix,
+///   so a chord must not flash the real cursor. The modifier is never swallowed: a
+///   hook that eats a keyup leaves the system key state stuck down.
 /// - Down/up consistency: an up event is swallowed only if its down was swallowed.
 /// </summary>
 public sealed class OverlayController : IDisposable
@@ -65,9 +70,14 @@ public sealed class OverlayController : IDisposable
     private const uint VkControl = 0x11;
     private const uint VkLeftControl = 0xA2;
     private const uint VkRightControl = 0xA3;
-
-    // M2 ink colour: InkChoice resolved for the current style (macOS default .match).
-    private static readonly Color InkColor = InkPalette.Resolve(Preferences.InkChoice, PointerStyle.Current);
+    private const uint VkMenu = 0x12;
+    private const uint VkLeftMenu = 0xA4;
+    private const uint VkRightMenu = 0xA5;
+    private const uint VkShift = 0x10;
+    private const uint VkLeftShift = 0xA0;
+    private const uint VkRightShift = 0xA1;
+    private const uint VkLeftWin = 0x5B;
+    private const uint VkRightWin = 0x5C;
 
     private long _busyIntervalTicks = TicksFromMs(1000.0 / 120);
     private long _nextTick;
@@ -91,7 +101,8 @@ public sealed class OverlayController : IDisposable
     private long _lastFrameTs;
     private string _fpsHud = "";
 
-    // Transient on-screen feedback for hotkey changes (smoothing level, fade, clear).
+    // Transient on-screen feedback for hotkey/toolbar changes (smoothing level, fade,
+    // clear, click-through mode, style, sound).
     private const long ToastMs = 1500;
     private string _toast = "";
     private long _toastUntilMs;
@@ -104,22 +115,30 @@ public sealed class OverlayController : IDisposable
 
     // ---- thread-shared state ----
     private volatile bool _active;
-    private volatile bool _clickThrough;
+    private volatile bool _clickThrough;   // latched by double Shift
+    private volatile bool _interactHeld;   // interact key held (temporary click-through)
+    private volatile bool _normalCursor;   // real cursor visible + hand hidden
+    private volatile bool _held;           // button held: press animation stays at full
+    private int _pressMilli;               // press amount × 1000 (hook writes 1000, compositor decays)
+    private volatile bool _styleDirty = true;
     private readonly ConcurrentQueue<Command> _commands = new();
     private long _cursorX;
     private long _cursorY;
     private long _lastActivityMs;
     private volatile bool _dirty = true;
     private volatile List<OverlayPart>? _overlays;
-    private volatile List<ToolbarButton>? _toolbar;
+    private volatile ToolbarLayout? _toolbar;
     private volatile MonitorInfo? _primaryMonitor;
 
     // ---- hook-thread state ----
     private readonly MouseDragTracker _dragTracker = new();
-    private readonly DoublePressDetector _doubleShift = new(() => Environment.TickCount64);
+    private readonly ShiftTapDetector _doubleShift = new(() => Environment.TickCount64);
     private bool _drawing;
     private int _buttonsDown; // real (non-injected) button downs - ups, hook thread only
     private bool _pendingClickThroughFlip; // WS_EX_TRANSPARENT swap deferred to the Up event
+    private bool _ctrlDown;
+    private bool _shiftDown;
+    private bool _winDown;
 
     // Ink feed: the hook appends stroke lifecycle events, each monitor's InkLayer paints
     // only the new points into its live bitmap and freezes finished strokes for the fade.
@@ -129,7 +148,6 @@ public sealed class OverlayController : IDisposable
     private PointF _downPoint;
     private PointF _lastInkPoint;
     private bool _strokeStarted;
-    private bool _ctrlDown;
     private int _strokeCount;
 
     // ---- overlay-thread state ----
@@ -143,6 +161,11 @@ public sealed class OverlayController : IDisposable
     private volatile int _fps;
     private long _statusRefreshAt;
     private string _status = "";
+    private Color _inkColor = InkPalette.Resolve(InkChoice.Match, PointerStyle.Default);
+    private float _gripX;
+    private bool _gripInit;
+    private bool _gripSettling;
+    private readonly TapSound _tapSound;
 
     private readonly Thread _thread;
     private volatile bool _quit;
@@ -150,11 +173,27 @@ public sealed class OverlayController : IDisposable
     public event Action<bool>? ActiveChanged;
 
     public bool IsActive => _active;
-    public bool IsClickThrough => _clickThrough;
+
+    /// <summary>Effective click-through: latched by double Shift or held by the interact key.</summary>
+    public bool IsClickThrough => _clickThrough || _interactHeld;
+
+    /// <summary>True while the interact key is held (temporary click-through).</summary>
+    public bool IsInteracting => _interactHeld;
+
+    /// <summary>True when the real cursor is shown and the hand hidden (interact key,
+    /// <c>interactKeepsHand</c> off).</summary>
+    public bool IsNormalCursor => _normalCursor;
+
     public bool ActiveRequested { get; private set; }
 
     /// <summary>Frames rendered in the last full second (composition thread).</summary>
     public int CurrentFps => _fps;
+
+    /// <summary>Current press amount 0..1 (harness: press animation).</summary>
+    public float PressAmount => Volatile.Read(ref _pressMilli) / 1000f;
+
+    /// <summary>Tap sound instance (harness: play count / loaded sounds).</summary>
+    public TapSound TapSound => _tapSound;
 
     /// <summary>Live + frozen ink strokes across monitors (harness: fade verification).</summary>
     public int InkStrokeCount
@@ -180,6 +219,9 @@ public sealed class OverlayController : IDisposable
         }
     }
 
+    /// <summary>Toolbar layout currently hit-tested by the hook (harness: geometry).</summary>
+    public ToolbarLayout? Toolbar => _toolbar;
+
     // Composition timing instrumentation (fpscheck harness).
     private long _drawTicks, _presentTicks, _frameSamples;
     public double DrawAvgMs => Volatile.Read(ref _frameSamples) == 0 ? 0 : _drawTicks / (double)Volatile.Read(ref _frameSamples) * 1000.0 / Stopwatch.Frequency;
@@ -187,6 +229,9 @@ public sealed class OverlayController : IDisposable
 
     public OverlayController()
     {
+        _tapSound = new TapSound(Preferences.TapSound) { Enabled = Preferences.SoundOn };
+        _tapSound.Warm();
+
         _thread = new Thread(OverlayLoop)
         {
             Name = "TinyHand.Overlay",
@@ -208,6 +253,7 @@ public sealed class OverlayController : IDisposable
         _quit = true;
         _commands.Enqueue(new Command(CommandKind.Quit));
         _thread.Join(TimeSpan.FromSeconds(4));
+        _tapSound.Dispose();
     }
 
     // =====================================================================
@@ -224,16 +270,23 @@ public sealed class OverlayController : IDisposable
                 PumpMessages();
                 if (ApplyCommands()) break;
 
-                bool busy = _active && _clock.ElapsedMilliseconds - Interlocked.Read(ref _lastActivityMs) < IdleAfterMs;
+                if (_active) AdvancePose();
+
+                bool busy = _active && (IdleElapsedMs() < IdleAfterMs
+                    || Volatile.Read(ref _pressMilli) > 0 || _gripSettling);
                 // Fading strokes need frames even while the pointer is idle; run them at the
                 // busy cadence so the 0.6 s fade stays smooth.
                 bool animating = _active && InkAnimating();
                 // The toast must disappear on its own: keep rendering until one frame after
                 // its deadline, otherwise the last visible frame would leave it on screen.
                 bool toast = _active && _clock.ElapsedMilliseconds < Interlocked.Read(ref _toastUntilMs) + 100;
-                bool render = _active && (busy || _dirty || animating || toast);
+                // Idle pacing is a real 20 Hz tick (macOS runs its timer at 20 Hz when the
+                // pointer rests): the frame counter and the HUD stay meaningful and the pose
+                // keeps settling. A dirty flag promotes that frame to the busy cadence so a
+                // change is painted immediately instead of up to 50 ms later.
+                bool render = _active;
                 long intervalTicks = _active
-                    ? ((busy || animating || toast) ? _busyIntervalTicks : _idleIntervalTicks)
+                    ? ((busy || animating || toast || _dirty) ? _busyIntervalTicks : _idleIntervalTicks)
                     : TicksFromMs(25);
 
                 if (render)
@@ -277,8 +330,7 @@ public sealed class OverlayController : IDisposable
     /// overruns its budget must NOT restart the timeline: the old reset-at-one-period
     /// turned any ~18 ms frame into a 33 ms gap (full period of extra sleep), which
     /// is exactly the periodic hitch seen on screen. Resync only after real stalls
-    /// (2+ periods late); small overruns catch up on the next immediate tick.
-    /// </summary>
+    /// (2+ periods late); small overruns catch up on the next immediate tick.</summary>
     private void WaitUntilNextTick(long intervalTicks)
     {
         long now = Stopwatch.GetTimestamp();
@@ -330,6 +382,8 @@ public sealed class OverlayController : IDisposable
         TraceLine("apply activate");
         if (_active) return;
         _clickThrough = false;
+        _interactHeld = false;
+        _normalCursor = false;
         _dragTracker.Reset();
         _doubleShift.Reset();
         _buttonsDown = 0;
@@ -337,7 +391,14 @@ public sealed class OverlayController : IDisposable
         // Ctrl may have been released while the hook was uninstalled: start clean so the
         // first stroke after activation cannot inherit a stale arrow head.
         _ctrlDown = false;
+        _shiftDown = false;
+        _winDown = false;
         _journal.Arrow = false;
+        Volatile.Write(ref _pressMilli, 0);
+        _held = false;
+        _gripInit = false;
+        _gripSettling = false;
+        _styleDirty = true;
         ClearStrokes();
         RebuildOverlays();
 
@@ -377,8 +438,12 @@ public sealed class OverlayController : IDisposable
 
         TryRestoreGlobalCursor();
         _clickThrough = false;
+        _interactHeld = false;
+        _normalCursor = false;
         _buttonsDown = 0;
         _pendingClickThroughFlip = false;
+        _held = false;
+        Volatile.Write(ref _pressMilli, 0);
 
         if (_overlays is { } overlays)
             foreach (var part in overlays)
@@ -442,7 +507,7 @@ public sealed class OverlayController : IDisposable
             foreach (var monitor in monitors)
             {
                 OverlayWindow window = OverlayWindow.Create(monitor.Bounds, layered: false);
-                window.CursorHidden += w => _active && !_clickThrough;
+                window.CursorHidden += w => _active && !IsClickThrough && !_normalCursor;
                 window.SystemMessage += (_, _) => _commands.Enqueue(new Command(CommandKind.RebuildMonitors));
                 window.Show();
                 var surface = _renderer.CreateSurface(window.Handle, monitor.Bounds.Width, monitor.Bounds.Height);
@@ -451,7 +516,7 @@ public sealed class OverlayController : IDisposable
                     Monitor = monitor,
                     Window = window,
                     Surface = surface,
-                    Resources = _scene.CreateResources(_renderer, surface.Context, monitor, InkColor),
+                    Resources = _scene.CreateResources(_renderer, surface.Context, monitor, _inkColor),
                 });
             }
         }
@@ -483,15 +548,15 @@ public sealed class OverlayController : IDisposable
         _dirty = true; // fresh frames: repaint once on the next tick
     }
 
-    /// <summary>Rebuild the toolbar buttons from the current click-through state so the
-    /// toggle label follows the mode immediately (called from the hook thread on toggle;
-    /// RefreshToolbar writes the volatile field atomically and the compositor picks the
-    /// new list up on its next frame).</summary>
+    /// <summary>Rebuild the toolbar buttons from the current style/sound state so the
+    /// highlight and the speaker icon follow immediately (called from the hook thread on a
+    /// pick; RefreshToolbar writes the volatile field atomically and the compositor picks the
+    /// new layout up on its next frame).</summary>
     private void RefreshToolbar()
     {
         _toolbar = _primaryMonitor is { } primary
-            ? ToolbarModel.Build(primary.Bounds.Width, (int)primary.DpiX, _clickThrough)
-            : [];
+            ? ToolbarModel.Build(primary.Bounds.Width, (int)primary.DpiX, Preferences.Style.Id, Preferences.SoundOn)
+            : new ToolbarLayout(Rectangle.Empty, []);
     }
 
     private void TryHideGlobalCursor()
@@ -527,19 +592,55 @@ public sealed class OverlayController : IDisposable
         // After coming back to drawing mode the restored arrow stays until the next
         // WM_SETCURSOR (i.e. the next mouse move). Post one now so the blank cursor
         // re-applies immediately instead of flashing the real arrow.
-        if (_active && _overlays is { } overlays)
+        if (_active && !IsClickThrough && !_normalCursor && _overlays is { } overlays)
             foreach (var part in overlays)
                 User32.SendMessage(part.Window.Handle, Win32.WM_SETCURSOR, part.Window.Handle, (IntPtr)1 /* HTCLIENT */);
+    }
+
+    // =====================================================================
+    // Pose (press animation + grip smoothing), advanced once per frame
+    // =====================================================================
+
+    private void AdvancePose()
+    {
+        var primary = _primaryMonitor;
+        if (primary is not null)
+        {
+            float cursorX = Interlocked.Read(ref _cursorX);
+            float target = HandPoseSolver.GripTargetX(cursorX, primary.Bounds);
+            if (!_gripInit)
+            {
+                _gripX = target;
+                _gripInit = true;
+            }
+            else
+            {
+                _gripX = HandPoseSolver.FollowGrip(_gripX, target);
+            }
+            _gripSettling = Math.Abs(target - _gripX) > 0.5f;
+        }
+
+        if (_held) return;
+        int press = Volatile.Read(ref _pressMilli);
+        if (press > 0)
+            Volatile.Write(ref _pressMilli, (int)(press * (1 - HandPoseSolver.PressReleaseFollow)));
     }
 
     // =====================================================================
     // Composition
     // =====================================================================
 
-private void RenderFrame(bool busy)
+    private void RenderFrame(bool busy)
     {
         var overlays = _overlays;
         if (overlays is null || overlays.Count == 0) return;
+
+        if (_styleDirty)
+        {
+            _styleDirty = false;
+            _inkColor = InkPalette.Resolve(Preferences.InkChoice, Preferences.Style);
+            foreach (var part in overlays) part.Resources.Ink.SetColor(_inkColor);
+        }
 
         var snapshotBase = BuildSnapshot();
 
@@ -614,9 +715,12 @@ private void RenderFrame(bool busy)
             var kbdStats = _hooks?.KeyboardStats.TakeSnapshot();
             string fade = Preferences.FadeSeconds > 0 ? $"fade {Preferences.FadeSeconds:0.#}s" : "fade off";
             string smooth = $"smooth {SmoothingPresets.Title(Preferences.SmoothingLevel)}";
+            string mode = IsClickThrough ? (_interactHeld ? "interact" : "click-through") : "draw";
+            string style = $"{Preferences.Style.Id} #{_inkColor.R:X2}{_inkColor.G:X2}{_inkColor.B:X2}";
+            string sound = Preferences.SoundOn ? "sound on" : "sound off";
             _status = busy
-                ? $"TinyHand M2 | mode {(_clickThrough ? "click-through" : "draw")} | {_fps} fps | mouse cb p95 {mouseStats?.P95Ms ?? 0:0.000} ms | kbd cb p95 {kbdStats?.P95Ms ?? 0:0.000} ms | strokes {Volatile.Read(ref _strokeCount)} | ink #{InkColor.R:X2}{InkColor.G:X2}{InkColor.B:X2} | {fade} | {smooth} | Ctrl+Alt+X clear | Ctrl+Alt+F fade | Ctrl+Alt+S smooth | Ctrl+Alt+H toggle | Esc close | Ctrl+Alt+Q exit app"
-                : $"TinyHand M2 | mode {(_clickThrough ? "click-through" : "draw")} | {_fps} fps | ink #{InkColor.R:X2}{InkColor.G:X2}{InkColor.B:X2} | {fade} | {smooth} | Ctrl+Alt+X clear | Ctrl+Alt+F fade | Ctrl+Alt+S smooth | Ctrl+Alt+H toggle | Esc close | Ctrl+Alt+Q exit app";
+                ? $"TinyHand M3 | mode {mode} | {_fps} fps | mouse cb p95 {mouseStats?.P95Ms ?? 0:0.000} ms | kbd cb p95 {kbdStats?.P95Ms ?? 0:0.000} ms | strokes {Volatile.Read(ref _strokeCount)} | {style} | {sound} | {fade} | {smooth} | Ctrl+Alt+X clear | Ctrl+Alt+F fade | Ctrl+Alt+S smooth | Ctrl+Alt+H toggle | Esc close | Ctrl+Alt+Q exit app"
+                : $"TinyHand M3 | mode {mode} | {_fps} fps | {style} | {sound} | {fade} | {smooth} | Ctrl+Alt+X clear | Ctrl+Alt+F fade | Ctrl+Alt+S smooth | Ctrl+Alt+H toggle | Esc close | Ctrl+Alt+Q exit app";
             _statusRefreshAt = now + 250;
 
             var stats = FrameStatsSnapshot();
@@ -676,14 +780,21 @@ private void RenderFrame(bool busy)
 
     private SceneSnapshot BuildSnapshot()
     {
+        var style = Preferences.Style;
         return new SceneSnapshot(
             Cursor: new Point((int)Interlocked.Read(ref _cursorX), (int)Interlocked.Read(ref _cursorY)),
-            Toolbar: _toolbar ?? [],
+            Toolbar: _toolbar ?? new ToolbarLayout(Rectangle.Empty, []),
             IsPrimary: _primaryMonitor?.IsPrimary ?? false,
             DpiX: (int)(_primaryMonitor?.DpiX ?? 96),
             Status: _status,
             FpsHud: _fpsHud,
-            Toast: _clock.ElapsedMilliseconds < Interlocked.Read(ref _toastUntilMs) ? _toast : "");
+            Toast: _clock.ElapsedMilliseconds < Interlocked.Read(ref _toastUntilMs) ? _toast : "",
+            StyleId: style.Id,
+            Laser: style.IsLaser,
+            HandVisible: !_normalCursor,
+            Press: Volatile.Read(ref _pressMilli) / 1000f,
+            GripX: _gripX,
+            SoundOn: Preferences.SoundOn);
     }
 
     // =====================================================================
@@ -710,11 +821,12 @@ private void RenderFrame(bool busy)
             case MouseEventKind.Down:
             {
                 _buttonsDown++;
+                _doubleShift.RegisterMouseDown();
                 bool inToolbar = TryGetToolbarButton(e.X, e.Y, out ToolbarButton? button);
                 var decision = MousePolicy.Decide(new MousePolicyInput(
                     Kind: MouseEventKind.Down,
                     IsActive: _active,
-                    ClickThrough: _clickThrough,
+                    ClickThrough: IsClickThrough,
                     DownSwallowedByUs: _dragTracker.DownSwallowed,
                     InToolbar: inToolbar));
                 return HandleDown(decision, button);
@@ -724,6 +836,7 @@ private void RenderFrame(bool busy)
             {
                 if (_buttonsDown > 0) _buttonsDown--;
                 bool swallow = _dragTracker.OnUp();
+                _held = false;
                 if (_drawing)
                 {
                     _drawing = false;
@@ -742,13 +855,13 @@ private void RenderFrame(bool busy)
                 {
                     // All buttons released: apply the deferred WS_EX_TRANSPARENT swap.
                     _pendingClickThroughFlip = false;
-                    ApplyClickThroughStyle();
+                    ApplyWindowMode();
                 }
                 return swallow;
             }
 
             case MouseEventKind.Wheel:
-                return !_clickThrough;
+                return !IsClickThrough;
 
             default:
                 return false;
@@ -760,7 +873,7 @@ private void RenderFrame(bool busy)
         if (!TraceEnabled) return;
         var kind = Classify(e.Message);
         if (kind is MouseEventKind.Down or MouseEventKind.Up)
-            TraceLine($"mouse {kind} at ({e.X},{e.Y}) ctx={_clickThrough} draw={_drawing} toolbar={TryGetToolbarButton(e.X, e.Y, out var button)}{(button is null ? "" : $" id={button.Id}")}");
+            TraceLine($"mouse {kind} at ({e.X},{e.Y}) ctx={IsClickThrough} draw={_drawing} toolbar={TryGetToolbarButton(e.X, e.Y, out var button)}{(button is null ? "" : $" id={button.Id}")}");
     }
 
     private MouseEventKind Classify(uint message) => message switch
@@ -776,14 +889,17 @@ private void RenderFrame(bool busy)
     {
         bool tracked = _dragTracker.OnDown(decision) == MousePolicyResult.Swallow;
 
-        if (decision == MousePolicyResult.ToolbarCommand && button is not null)
+        if (decision == MousePolicyResult.ToolbarCommand)
         {
-            RunToolbarCommand(button);
+            if (button is not null) RunToolbarCommand(button);
             return true;
         }
 
         if (tracked)
         {
+            // macOS onMouseDown: the press pose and the tap sound fire on every swallowed
+            // down; ink only appears once the pointer actually drags (4 pt threshold).
+            Press(playSound: true);
             _drawing = true;
             _smoother.Reset();
             _stabilizer.Reset();
@@ -796,17 +912,33 @@ private void RenderFrame(bool busy)
             return true;
         }
 
+        // Interact mode: the click belongs to the app below, but the hand still presses
+        // (macOS onInteractDown) — visible only when interactKeepsHand is on.
+        if (_interactHeld) Press(playSound: false);
         return false;
+    }
+
+    /// <summary>Full press: the hand settles instantly (macOS <c>ArmView.press()</c>); the
+    /// compositor decays it per frame once the button is released.</summary>
+    private void Press(bool playSound)
+    {
+        Volatile.Write(ref _pressMilli, 1000);
+        _held = true;
+        if (playSound) _tapSound.Play();
+        _dirty = true;
     }
 
     private void RunToolbarCommand(ToolbarButton button)
     {
-        switch (button.Id)
+        switch (button.Kind)
         {
-            case "click_through":
-                ToggleClickThrough();
+            case ToolbarButtonKind.Style:
+                SelectStyle(button.Id);
                 break;
-            case "exit":
+            case ToolbarButtonKind.Sound:
+                ToggleSound();
+                break;
+            case ToolbarButtonKind.Exit:
                 // Single path through SetActive keeps ActiveRequested (hotkey/menu mirror)
                 // in sync with the real overlay state.
                 SetActive(false);
@@ -814,43 +946,69 @@ private void RenderFrame(bool busy)
         }
     }
 
+    /// <summary>Pick a pointer style (macOS <c>OverlayController.pick</c>): the hand sprite and
+    /// the ink colour follow it.</summary>
+    public void SelectStyle(string id)
+    {
+        var style = PointerStyle.ById(id);
+        if (style.Id == Preferences.Style.Id) return;
+        Preferences.Style = style;
+        _styleDirty = true;
+        RefreshToolbar();
+        ShowToast(style.Title);
+        _dirty = true;
+    }
+
+    /// <summary>Toolbar speaker button: tap sound on/off.</summary>
+    public void ToggleSound()
+    {
+        Preferences.SoundOn = !Preferences.SoundOn;
+        _tapSound.Enabled = Preferences.SoundOn;
+        RefreshToolbar();
+        ShowToast(Preferences.SoundOn ? "Sound: on" : "Sound: off");
+        _dirty = true;
+    }
+
     private void ToggleClickThrough()
     {
         bool newMode = !_clickThrough;
         TraceLine($"toggle click-through -> {newMode}");
         _clickThrough = newMode;
+        ShowToast(newMode ? "Click-through: on" : "Click-through: off");
+        ApplyPointerMode();
+    }
+
+    /// <summary>Recompute the pointer mode after a click-through / interact change. The hand
+    /// visibility follows immediately; the window style and the global cursor swap are
+    /// deferred while a button is held (see the class comment).</summary>
+    private void ApplyPointerMode()
+    {
+        _normalCursor = _interactHeld && !Preferences.InteractKeepsHand;
+        _dirty = true;
+        RefreshToolbar();
 
         if (_buttonsDown > 0)
         {
-            // Mid-drag toggle: defer the WS_EX_TRANSPARENT flip (and the global cursor
-            // swap) to the Up event. Flipping hit-testing while the button is held makes
-            // the app below the cursor owner again; drag code re-asserts its cached
-            // cursor handle (never reloaded through the blanked system slot), so the
-            // real cursor stayed visible for the whole drag. Until Up, the overlay
-            // keeps hit-testing and its last-set blank cursor keeps the display clean.
             _pendingClickThroughFlip = true;
-            RefreshToolbar();
-            _dirty = true;
             return;
         }
-
-        ApplyClickThroughStyle();
-        RefreshToolbar();
-        _dirty = true;
+        ApplyWindowMode();
     }
 
-    /// <summary>Apply the window styles and cursor mode that follow from _clickThrough.
-    /// Runs on the hook thread (immediate toggles and Up-deferred completions).</summary>
-    private void ApplyClickThroughStyle()
+    /// <summary>Apply the window styles and cursor mode that follow from the effective
+    /// click-through state. Runs on the hook thread (immediate toggles and Up-deferred
+    /// completions).</summary>
+    private void ApplyWindowMode()
     {
-        bool newMode = _clickThrough;
+        bool through = IsClickThrough;
+        bool hideGlobal = through && !_normalCursor;
 
         // Hide the real cursor synchronously on the hook thread BEFORE flipping
         // WS_EX_TRANSPARENT: the moment the overlay stops hit-testing, the window
         // below answers WM_SETCURSOR and restores its cursor. The hide used to ride
         // the command queue (one overlay-loop period later, ~8-50 ms), which showed
         // the real cursor for a frame on every double-Shift toggle.
-        if (newMode)
+        if (hideGlobal)
             TryHideGlobalCursor();
 
         // Flip WS_EX_TRANSPARENT immediately from the hook thread (SetWindowLong on
@@ -858,16 +1016,29 @@ private void RenderFrame(bool busy)
         // repaints the status/toolbar.
         if (_overlays is { } overlays)
             foreach (var part in overlays)
-                part.Window.ClickThrough = newMode;
+                part.Window.ClickThrough = through;
+
+        // Coming back to drawing mode: the app below may have been raised above the overlay
+        // by the click-through click, so re-assert the topmost band (macOS re-orders the
+        // overlay window the same way when it returns to the active space).
+        if (!through && _overlays is { } parts)
+            foreach (var part in parts)
+                User32.SetWindowPos(part.Window.Handle, Win32.HWND_TOPMOST, 0, 0, 0, 0,
+                    Win32.SWP_NOMOVE | Win32.SWP_NOSIZE | Win32.SWP_NOACTIVATE);
 
         // Restoring (SPI_SETCURSORS fallback) can be slow: keep it off the hook thread.
-        _commands.Enqueue(new Command(newMode ? CommandKind.HideGlobalCursor : CommandKind.RestoreGlobalCursor));
+        _commands.Enqueue(new Command(hideGlobal ? CommandKind.HideGlobalCursor : CommandKind.RestoreGlobalCursor));
     }
 
     private bool OnKeyboardFilter(HookKeyEvent e)
     {
         if (!_active) return false;
         MarkActivity();
+
+        // The tap detector sees every key: it needs the Shift edges, the other modifiers
+        // (a tap only counts when Shift is alone) and the input count (typing a capital
+        // letter must not toggle click-through).
+        bool doubleTap = _doubleShift.RegisterKey(e.Vk, e.KeyDown);
 
         // Ctrl is the arrow modifier (macOS ⌘): track both edges so the head appears and
         // disappears without waiting for the next mouse move.
@@ -883,6 +1054,20 @@ private void RenderFrame(bool busy)
             return false; // never swallow Ctrl
         }
 
+        if (e.Vk is VkShift or VkLeftShift or VkRightShift)
+            _shiftDown = e.KeyDown;
+        if (e.Vk is VkLeftWin or VkRightWin)
+            _winDown = e.KeyDown;
+
+        // Interact key: temporary click-through while held (macOS ⌥ → Alt).
+        if (IsInteractKey(e.Vk))
+            return HandleInteractKey(e.KeyDown);
+
+        // The tap detector fires on the Shift *up* edge (a tap is down+up), so the trigger
+        // must be evaluated before the keydown-only section below.
+        if (doubleTap && Preferences.DoubleShiftClickThrough)
+            ToggleClickThrough();
+
         if (!e.KeyDown) return false;
 
         if (e.Vk == VkEscape)
@@ -895,23 +1080,60 @@ private void RenderFrame(bool busy)
         if (e.IsOwnInjected) return false;
 
         TraceLine($"vk=0x{e.Vk:X2} down own={e.IsOwnInjected}");
-        if (_doubleShift.RegisterKeyDown(e.Vk))
-            ToggleClickThrough();
+        return false;
+    }
 
+    private bool IsInteractKey(uint vk) => Preferences.InteractKey switch
+    {
+        InteractKey.Alt => vk is VkMenu or VkLeftMenu or VkRightMenu,
+        InteractKey.Ctrl => vk is VkControl or VkLeftControl or VkRightControl,
+        InteractKey.Shift => vk is VkShift or VkLeftShift or VkRightShift,
+        _ => false,
+    };
+
+    /// <summary>
+    /// Interact key edge. The modifier is never swallowed: a low-level hook that eats a keyup
+    /// leaves the system's key state stuck down (every later keystroke would arrive as
+    /// Alt+key), so the Alt keyup always reaches the app. The consequence is the standard
+    /// Windows behaviour of a lone Alt tap — the app below highlights its menu bar — which is
+    /// documented in PLAN.md; the interact key is configurable (M4 settings).
+    /// </summary>
+    private bool HandleInteractKey(bool down)
+    {
+        if (Preferences.InteractKey == InteractKey.Off) return false;
+
+        if (down)
+        {
+            if (_interactHeld) return false;
+            // Alt alone: Ctrl+Alt is the app's hotkey prefix, so a chord must not flash the
+            // real cursor (Windows refinement of the macOS ⌥ behaviour).
+            if (_ctrlDown || _shiftDown || _winDown) return false;
+            _interactHeld = true;
+            TraceLine("interact down");
+            ApplyPointerMode();
+            return false;
+        }
+
+        if (!_interactHeld) return false;
+        _interactHeld = false;
+        TraceLine("interact up");
+        ApplyPointerMode();
         return false;
     }
 
     private bool TryGetToolbarButton(int screenX, int screenY, out ToolbarButton? button)
     {
         button = null;
-        if (_clickThrough) return false;
+        if (IsClickThrough) return false;
         if (_primaryMonitor is not { } primary) return false;
         var bounds = primary.Bounds;
         if (!bounds.Contains(screenX, screenY)) return false;
-        var localX = screenX - bounds.X;
-        var localY = screenY - bounds.Y;
-        button = ToolbarModel.HitTest(_toolbar ?? [], localX, localY);
-        return button is not null;
+        if (_toolbar is not { } layout) return false;
+        int localX = screenX - bounds.X;
+        int localY = screenY - bounds.Y;
+        if (!ToolbarModel.PanelContains(layout, localX, localY)) return false;
+        button = ToolbarModel.HitTest(layout, localX, localY);
+        return true;
     }
 
     /// <summary>macOS OverlayController.drag(): the stroke starts only after 4 pt of movement
@@ -978,7 +1200,7 @@ private void RenderFrame(bool busy)
         ShowToast("Ink cleared");
     }
 
-    /// <summary>Transient on-screen feedback for hotkey changes.</summary>
+    /// <summary>Transient on-screen feedback for hotkey/toolbar changes.</summary>
     private void ShowToast(string text)
     {
         _toast = text;
@@ -1005,6 +1227,8 @@ private void RenderFrame(bool busy)
     }
 
     private void MarkActivity() => Interlocked.Exchange(ref _lastActivityMs, _clock.ElapsedMilliseconds);
+
+    private long IdleElapsedMs() => _clock.ElapsedMilliseconds - Interlocked.Read(ref _lastActivityMs);
 
     // TH_TRACE=1: hook decisions + lifecycle events appended to tinyhand-trace.log
     // next to the executable (works for GUI mode, where there is no console).

@@ -49,11 +49,11 @@ public class InkPaletteTests
     }
 
     [Fact]
-    public void CurrentStyle_IsThePrototypeMidnightHand()
+    public void DefaultStyle_IsLavenderLikeMacOS()
     {
-        // hand_black.png is the macOS "Midnight" asset; M3 replaces this with the selection.
-        Assert.Equal("black", PointerStyle.Current.Id);
-        Assert.Equal(InkPalette.Rgb(0x1D1D21), InkPalette.Resolve(Preferences.InkChoice, PointerStyle.Current));
+        // M3 selects the style from the toolbar; the macOS default is lavender (#8754F2).
+        Assert.Equal("lavender", Preferences.Style.Id);
+        Assert.Equal(InkPalette.Purple, InkPalette.Resolve(Preferences.InkChoice, Preferences.Style));
     }
 }
 

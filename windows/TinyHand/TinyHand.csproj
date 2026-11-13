@@ -19,7 +19,14 @@
   </ItemGroup>
 
   <ItemGroup>
-    <EmbeddedResource Include="assets\hand_black.png" LogicalName="TinyHand.assets.hand_black.png" />
+    <PackageReference Include="NAudio" Version="2.2.1" />
+  </ItemGroup>
+
+  <!-- Shared assets live at the repository root (the macOS app bundles the same files):
+       the 36 built-in hand sprites (hand + stem compose) and the 15 tap sounds. -->
+  <ItemGroup>
+    <EmbeddedResource Include="..\..\assets\hand_*.png" LogicalName="TinyHand.assets.%(Filename)%(Extension)" />
+    <EmbeddedResource Include="..\..\assets\sounds\tap_*.wav" LogicalName="TinyHand.assets.sounds.%(Filename)%(Extension)" />
   </ItemGroup>
 
 </Project>

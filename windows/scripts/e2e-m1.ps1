@@ -93,6 +93,14 @@ function Hotkey() { # Ctrl+Alt+H
     Pump 600
 }
 function Esc() { KeyPress 0x1B; Pump 600 }
+function PixelAt([int]$x, [int]$y) {
+    $bmp = New-Object System.Drawing.Bitmap 1, 1
+    $g = [System.Drawing.Graphics]::FromImage($bmp)
+    $g.CopyFromScreen($x, $y, 0, 0, (New-Object System.Drawing.Size 1, 1))
+    $c = $bmp.GetPixel(0, 0)
+    $g.Dispose(); $bmp.Dispose()
+    return $c
+}
 
 $app = $null
 try {
@@ -133,42 +141,50 @@ try {
     Test 'D down/up same target (pass shift)' ($events.Count -eq 4) "events=$($events.Count) [$($events -join '; ')]"
     # mode now: draw
 
-    # E: toolbar buttons (primary monitor, top-center, ToolbarModel geometry)
-    # Toolbar geometry — keep in sync with TinyHand/Logic/ToolbarModel.cs constants:
-    # ButtonHeightPx=56, TopMarginPx=16, GapPx=12, ToggleWidthPx=280, ExitWidthPx=120.
-    $hdc = [E2E.Win]::GetDC([IntPtr]::Zero)
-    $dpi = [E2E.Win]::GetDeviceCaps($hdc, 88)
-    if ($dpi -lt 96) { $dpi = 96 }
-    $s = [Math]::Max(1, [int][Math]::Round($dpi / 96.0, [System.MidpointRounding]::AwayFromZero))
-    $screenW = [System.Windows.Forms.Screen]::PrimaryScreen.Bounds.Width
-    $totalW = (280 + 12 + 120) * $s
-    $x0 = [Math]::Max(0, [int](($screenW - $totalW) / 2))
-    $ty = [int](16 * $s) + [int](($s * 56) / 2)
-    $cx = $x0 + [int](($s * 280) / 2)                  # click_through button center
-    $ex = $x0 + (280 + 12) * $s + [int](($s * 120) / 2) # exit button center
+    # E: toolbar buttons (primary monitor, top-center). The geometry comes from the app
+    # itself (--toolbargeom) so the script never drifts from ToolbarModel.
+    $geomFile = Join-Path $env:TEMP 'tinyhand-toolbargeom.txt'
+    Start-Process -FilePath $TinyHandExe -ArgumentList '--toolbargeom' -Wait -NoNewWindow -RedirectStandardOutput $geomFile
+    $buttons = @{}
+    foreach ($line in Get-Content $geomFile) {
+        $p = $line -split '\s+'
+        if ($p[0] -eq 'panel') { continue }
+        $buttons[$p[0]] = @{ x = [int]$p[2]; y = [int]$p[3]; w = [int]$p[4]; h = [int]$p[5] }
+    }
+    function Center([string]$id) {
+        $b = $buttons[$id]
+        return @(($b.x + [int]($b.w / 2)), ($b.y + [int]($b.h / 2)))
+    }
+    $coral = Center 'coral'
+    $exit = Center 'exit'
+    # Selected style gets a white 18 % highlight: sample the button's top edge (the thumbnail
+    # is inset by 4 px, so the highlight is visible there).
+    $probeX = $buttons['coral'].x + [int]($buttons['coral'].w / 2)
+    $probeY = $buttons['coral'].y + 2
+    $before = PixelAt $probeX $probeY
+    ClickAt $coral[0] $coral[1]   # toolbar: pick the coral style (swallowed, routed)
+    Pump 300
+    $after = PixelAt $probeX $probeY
+    Test 'E1 toolbar style pick routed' ($events.Count -eq 4 -and $after.GetBrightness() -gt $before.GetBrightness()) `
+        "events=$($events.Count) before=$before after=$after"
 
-    ClickAt $cx $ty  # toolbar: toggle -> click-through
-    ClickAt 500 600  # must be delivered now
-    Test 'E1 toolbar click-through toggles' ($events.Count -eq 6) "events=$($events.Count) toolbar=($cx,$ty) dpi=$dpi"
-
-    DoubleShift # back to draw mode so toolbar routes again
-    ClickAt $ex $ty # toolbar: exit -> deactivate
-    ClickAt 500 600  # inactive: delivered
-    Test 'E2 toolbar exit deactivates' ($events.Count -eq 8) "events=$($events.Count) exit=($ex,$ty)"
+    ClickAt $exit[0] $exit[1]     # toolbar: exit -> deactivate
+    ClickAt 500 600               # inactive: delivered
+    Test 'E2 toolbar exit deactivates' ($events.Count -eq 6) "events=$($events.Count) exit=($($exit[0]),$($exit[1]))"
 
     # F: Ctrl+Alt+H cycles (hook re-install between deactivations)
     Hotkey # activate
     ClickAt 500 600 # swallowed again: hooks reinstalled by the toggle
-    Test 'F1 hotkey re-activate swallows' ($events.Count -eq 8) "events=$($events.Count)"
+    Test 'F1 hotkey re-activate swallows' ($events.Count -eq 6) "events=$($events.Count)"
     Hotkey # deactivate
     ClickAt 500 600
-    Test 'F2 hotkey deactivate passes' ($events.Count -eq 10) "events=$($events.Count)"
+    Test 'F2 hotkey deactivate passes' ($events.Count -eq 8) "events=$($events.Count)"
 
     # G: Esc closes from active; clicks pass below
     Hotkey # activate
     Esc
     ClickAt 500 600
-    Test 'G Esc closes, clicks pass' ($events.Count -eq 12) "events=$($events.Count)"
+    Test 'G Esc closes, clicks pass' ($events.Count -eq 10) "events=$($events.Count)"
 }
 finally {
     try { $form.Close() } catch {}

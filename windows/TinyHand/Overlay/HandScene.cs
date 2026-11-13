@@ -1,5 +1,4 @@
 using System.Drawing;
-using System.Drawing.Imaging;
 using System.Numerics;
 using System.Runtime.InteropServices;
 using TinyHand.Interop;
@@ -24,26 +23,34 @@ namespace TinyHand.Overlay;
 /// not O(total ink)).</summary>
 public sealed record SceneSnapshot(
     Point Cursor,
-    List<ToolbarButton> Toolbar,
+    ToolbarLayout Toolbar,
     bool IsPrimary,
     int DpiX,
     string Status,
     string FpsHud,
-    string Toast)
+    string Toast,
+    string StyleId,
+    bool Laser,
+    bool HandVisible,
+    float Press,
+    float GripX,
+    bool SoundOn)
 {
-    public static SceneSnapshot Empty { get; } = new(new Point(), [], false, 96, "", "", "");
+    public static SceneSnapshot Empty { get; } = new(
+        new Point(), new ToolbarLayout(Rectangle.Empty, []), false, 96, "", "", "",
+        PointerStyle.Default.Id, false, true, 0, 0, true);
 }
 
 /// <summary>
-/// Direct2D scene renderer (M1.5). Paints the M1 scene on a DirectComposition
-/// flip-model back buffer: transparent background (the WS_EX_NOREDIRECTIONBITMAP
-/// window takes the hit-test over its whole rect, so the M1 alpha=1 background
-/// hack is gone), ink strokes, the hand at the cursor, toolbar strip, a
-/// diagnostics status line and the FPS HUD chip.
+/// Direct2D scene renderer (M1.5/M2/M3). Paints the scene on a DirectComposition flip-model
+/// back buffer: transparent background (the WS_EX_NOREDIRECTIONBITMAP window takes the
+/// hit-test over its whole rect), ink strokes, the posed hand at the cursor, the style
+/// toolbar, a diagnostics status line and the FPS HUD chip.
 ///
-/// Visual contract with the M1 GDI+ scene: same geometry methods, same colors
-/// (GDI+ ARGB => Color4), same DPI integer-scale handling, same prescaled hand
-/// sprites (bicubic once per scale, not per frame).
+/// M3 hand visual parity with macOS <c>ArmView</c>: the sprite is split into stem and hand,
+/// the stem stretches to reach the cursor, the hand keeps its length (minus the press
+/// shrink), the whole arm rotates around a grip below the screen edge, the drop shadow
+/// follows lift/press and the laser style draws a glowing dot instead of a hand.
 /// </summary>
 public sealed class HandScene
 {
@@ -51,90 +58,13 @@ public sealed class HandScene
     /// compare present cost against the transparent clear.</summary>
     public static bool OpaqueBackground;
 
-    // Hand asset is 1024x1536 (portrait, fingertip up). The fingertip is measured from the
-    // asset (macOS HandAsset.measure) and anchored at the cursor, so the hand tip sits
-    // exactly on the real pointer instead of the sprite's top-centre.
-    private const int HandHeightPx = 200;
-
-    /// <summary>Decoded hand sprite plus its measured fingertip anchor (fractions of the
-    /// sprite size). macOS measures the same values per style in PointerStyle.measure.</summary>
-    private sealed record HandAsset(Bitmap Bitmap, float TipX, float TipY);
-
-    // Asset decode + prescale stay on System.Drawing (load-time only, per scale).
-    private static readonly Lazy<HandAsset> Hand = new(LoadHand);
-
     private static readonly Lazy<IDWriteFactory> Write = new(
         () => DWriteApi.DWriteCreateFactory<IDWriteFactory>(DWriteFactoryType.Shared));
 
-    private enum TextKind { Toolbar, Status, Hud, Toast }
+    private enum TextKind { Status, Hud, Toast }
 
     private static readonly object FormatLock = new();
     private static readonly Dictionary<(TextKind, int), IDWriteTextFormat> Formats = new();
-
-    private static HandAsset LoadHand()
-    {
-        var asm = typeof(HandScene).Assembly;
-        using var stream = asm.GetManifestResourceStream("TinyHand.assets.hand_black.png")
-            ?? throw new InvalidOperationException("Embedded hand_black.png not found");
-        var bitmap = new Bitmap(stream);
-        var (tipX, tipY) = MeasureTip(bitmap);
-        return new HandAsset(bitmap, tipX, tipY);
-    }
-
-    /// <summary>macOS <c>HandAsset.measure</c>: the fingertip is the topmost opaque row; its x
-    /// is the centre of that row's extent <c>h/200</c> rows lower. Anchoring this point at the
-    /// cursor is what makes the hand tip sit on the real pointer.</summary>
-    private static (float TipX, float TipY) MeasureTip(Bitmap bitmap)
-    {
-        var data = bitmap.LockBits(new Rectangle(Point.Empty, bitmap.Size), ImageLockMode.ReadOnly,
-            System.Drawing.Imaging.PixelFormat.Format32bppArgb);
-        try
-        {
-            int w = bitmap.Width;
-            int h = bitmap.Height;
-            int top = -1;
-            for (int y = 0; y < h && top < 0; y++)
-            {
-                for (int x = 0; x < w; x++)
-                {
-                    if (AlphaAt(data, x, y) <= 128) continue;
-                    top = y;
-                    break;
-                }
-            }
-            if (top < 0) return (0.5f, 0f);
-
-            int row = Math.Min(h - 1, top + h / 200);
-            int lo = -1, hi = -1;
-            for (int x = 0; x < w; x++)
-            {
-                if (AlphaAt(data, x, row) <= 128) continue;
-                if (lo < 0) lo = x;
-                hi = x;
-            }
-            float tipX = lo < 0 ? 0.5f : (lo + hi) / 2f / w;
-            return (tipX, (float)top / h);
-        }
-        finally
-        {
-            bitmap.UnlockBits(data);
-        }
-    }
-
-    private static byte AlphaAt(BitmapData data, int x, int y) =>
-        Marshal.ReadByte(data.Scan0, y * data.Stride + x * 4 + 3);
-
-    /// <summary>Screen-space destination rect of the hand sprite for the given cursor and scale.</summary>
-    public static Rectangle HandRect(Point cursor, int scale)
-    {
-        var hand = Hand.Value;
-        int h = HandHeightPx * scale;
-        float w = h * (hand.Bitmap.Width / (float)hand.Bitmap.Height);
-        float x = cursor.X - w * hand.TipX;
-        float y = cursor.Y - h * hand.TipY;
-        // +1 px to cover filtering edge bleed.
-        return Rectangle.Round(new RectangleF(x - 1, y - 1, w + 2, h + 2));
-    }
 
     /// <summary>Local-space rect of the live FPS HUD chip (primary monitor, top-right).</summary>
     public static Rectangle HudRect(MonitorInfo monitor, int scale)
@@ -144,16 +74,19 @@ public sealed class HandScene
         return new Rectangle(monitor.Bounds.Width - w - 20 * scale, 16 * scale, w, h);
     }
 
-    /// <summary>Per-monitor Direct2D resources: device-dependent brushes plus the round-cap
-    /// stroke style and lazily prescaled hand bitmaps (per DPI scale).</summary>
+    /// <summary>Per-monitor Direct2D resources: device-dependent brushes, the round-cap stroke
+    /// style, lazily prescaled hand sprites (per style and DPI scale) and toolbar thumbnails.</summary>
     public sealed class SceneResources : IDisposable
     {
         public required ID2D1DeviceContext Context { get; init; }
+        public required ID2D1Factory1 Factory { get; init; }
+        public required ID2D1Device D2dDevice { get; init; }
         public required ID2D1StrokeStyle RoundStroke { get; init; }
         public required InkLayer Ink { get; init; }
         public required ID2D1SolidColorBrush ToolbarBg { get; init; }
         public required ID2D1SolidColorBrush ToolbarBorder { get; init; }
-        public required ID2D1SolidColorBrush ToolbarText { get; init; }
+        public required ID2D1SolidColorBrush ToolbarHighlight { get; init; }
+        public required ID2D1SolidColorBrush ToolbarIcon { get; init; }
         public required ID2D1SolidColorBrush StatusBrush { get; init; }
         public required ID2D1SolidColorBrush HudBg { get; init; }
         public required ID2D1SolidColorBrush HudBorder { get; init; }
@@ -161,36 +94,139 @@ public sealed class HandScene
         public required ID2D1SolidColorBrush ToastBg { get; init; }
         public required ID2D1SolidColorBrush ToastBorder { get; init; }
         public required ID2D1SolidColorBrush ToastText { get; init; }
+        public required ID2D1SolidColorBrush LaserDot { get; init; }
+        public required ID2D1SolidColorBrush LaserCore { get; init; }
+        public required ID2D1RadialGradientBrush LaserGlow { get; init; }
 
-        private readonly Dictionary<int, ID2D1Bitmap1> _handCache = new();
+        private readonly Dictionary<(string Style, int Scale), ID2D1Bitmap1> _handCache = new();
+        private readonly List<(string Style, int Scale)> _handOrder = [];
+        private readonly Dictionary<(string Style, int Scale), ID2D1Bitmap1> _shadowCache = new();
+        private readonly List<(string Style, int Scale)> _shadowOrder = [];
+        private readonly Dictionary<string, ID2D1Bitmap1> _thumbnails = new();
+        private const int HandCacheLimit = 2;
 
-        public ID2D1Bitmap1 HandBitmap(int scale)
+        // The toolbar is static between picks: 39 buttons with 36 thumbnail blits cost
+        // ~4.5 ms per frame when painted directly. It is painted once into its own bitmap
+        // and blitted afterwards (invalidated by the layout/style/sound/thumbnail count).
+        private readonly object _toolbarLock = new();
+        private ID2D1DeviceContext? _toolbarContext;
+        private ID2D1Bitmap1? _toolbarBitmap;
+        private string _toolbarKey = "";
+
+        public ID2D1Bitmap1? CachedToolbar(int width, int height, string key, Action<ID2D1DeviceContext> paint)
         {
+            lock (_toolbarLock)
+            {
+                if (_toolbarBitmap is not null && _toolbarKey == key) return _toolbarBitmap;
+                if (width <= 0 || height <= 0) return null;
+                _toolbarContext ??= D2dDevice.CreateDeviceContext(DeviceContextOptions.None);
+                _toolbarContext.SetDpi(96, 96);
+                _toolbarBitmap?.Dispose();
+                _toolbarBitmap = _toolbarContext.CreateBitmap(new Vortice.Mathematics.SizeI(width, height),
+                    IntPtr.Zero, 0, new BitmapProperties1
+                    {
+                        PixelFormat = new D2dPixelFormat(Format.B8G8R8A8_UNorm, D2dAlphaMode.Premultiplied),
+                        DpiX = 96,
+                        DpiY = 96,
+                        BitmapOptions = BitmapOptions.Target,
+                    });
+                _toolbarContext.Target = _toolbarBitmap;
+                _toolbarContext.BeginDraw();
+                _toolbarContext.Clear(new Color4(0, 0, 0, 0));
+                paint(_toolbarContext);
+                _toolbarContext.EndDraw();
+                _toolbarContext.Target = null;
+                _toolbarKey = key;
+                return _toolbarBitmap;
+            }
+        }
+
+        /// <summary>Number of decoded thumbnails (part of the toolbar cache key: a thumbnail
+        /// arriving from the background preload must repaint the strip).</summary>
+        public int ThumbnailCount
+        {
+            get { lock (_thumbnails) return _thumbnails.Count; }
+        }
+
+        /// <summary>Prescaled full sprite for a style: the hand part is drawn at
+        /// <c>PointerSize × monitorHeight</c>, so the bitmap is prescaled to that size once.</summary>
+        public ID2D1Bitmap1? HandBitmap(string styleId, int scale, HandMetrics metrics, int monitorHeight)
+        {
+            var key = (styleId, scale);
             lock (_handCache)
             {
-                if (_handCache.TryGetValue(scale, out var cached)) return cached;
-                var bitmap = BuildHandBitmap(scale);
-                _handCache[scale] = bitmap;
+                if (_handCache.TryGetValue(key, out var cached)) return cached;
+                var sprite = HandAssets.Sprite(styleId);
+                if (sprite is null) return null;
+
+                int handPx = Math.Max(8, (int)Math.Round(Preferences.PointerSize * monitorHeight));
+                int height = Math.Max(8, (int)Math.Round(handPx / metrics.HandSpan));
+                int width = Math.Max(8, (int)Math.Round(height * metrics.Aspect));
+                using var prescaled = new Bitmap(width, height, System.Drawing.Imaging.PixelFormat.Format32bppArgb);
+                using (var g = Graphics.FromImage(prescaled))
+                {
+                    g.InterpolationMode = System.Drawing.Drawing2D.InterpolationMode.HighQualityBicubic;
+                    g.PixelOffsetMode = System.Drawing.Drawing2D.PixelOffsetMode.Half;
+                    g.DrawImage(sprite, 0, 0, width, height);
+                }
+                var (bytes, pitch) = HandAssets.PremultipliedBytes(prescaled);
+                var bitmap = CreateBitmap(bytes, pitch, width, height);
+
+                _handCache[key] = bitmap;
+                _handOrder.Add(key);
+                while (_handOrder.Count > HandCacheLimit)
+                {
+                    var evicted = _handOrder[0];
+                    _handOrder.RemoveAt(0);
+                    if (_handCache.Remove(evicted, out var stale)) stale.Dispose();
+                }
                 return bitmap;
             }
         }
 
-        private ID2D1Bitmap1 BuildHandBitmap(int scale)
+        /// <summary>Pre-blurred silhouette for the hand's drop shadow (1/4 sprite resolution).</summary>
+        public ID2D1Bitmap1? ShadowBitmap(string styleId, int scale)
         {
-            var asset = Hand.Value;
-            int h = HandHeightPx * scale;
-            int w = (int)Math.Round(h * (asset.Bitmap.Width / (float)asset.Bitmap.Height));
-            using var prescaled = new Bitmap(w, h, System.Drawing.Imaging.PixelFormat.Format32bppArgb);
-            using (var g = Graphics.FromImage(prescaled))
+            var key = (styleId, scale);
+            lock (_shadowCache)
             {
-                g.InterpolationMode = System.Drawing.Drawing2D.InterpolationMode.HighQualityBicubic;
-                g.PixelOffsetMode = System.Drawing.Drawing2D.PixelOffsetMode.Half;
-                g.DrawImage(asset.Bitmap, 0, 0, w, h);
+                if (_shadowCache.TryGetValue(key, out var cached)) return cached;
+                var shadow = HandAssets.Shadow(styleId);
+                if (shadow is null) return null;
+                var (bytes, pitch) = HandAssets.PremultipliedBytes(shadow);
+                var bitmap = CreateBitmap(bytes, pitch, shadow.Width, shadow.Height);
+                _shadowCache[key] = bitmap;
+                _shadowOrder.Add(key);
+                while (_shadowOrder.Count > HandCacheLimit)
+                {
+                    var evicted = _shadowOrder[0];
+                    _shadowOrder.RemoveAt(0);
+                    if (_shadowCache.Remove(evicted, out var stale)) stale.Dispose();
+                }
+                return bitmap;
             }
-            var (bytes, pitch) = PremultipliedBytes(prescaled);
+        }
+
+        /// <summary>Toolbar thumbnail for a style (null until the background preload finishes).</summary>
+        public ID2D1Bitmap1? Thumbnail(string styleId)
+        {
+            lock (_thumbnails)
+            {
+                if (_thumbnails.TryGetValue(styleId, out var cached)) return cached;
+                var thumb = HandAssets.Thumbnail(styleId);
+                if (thumb is null) return null;
+                var (bytes, pitch) = HandAssets.PremultipliedBytes(thumb);
+                var bitmap = CreateBitmap(bytes, pitch, thumb.Width, thumb.Height);
+                _thumbnails[styleId] = bitmap;
+                return bitmap;
+            }
+        }
+
+        private ID2D1Bitmap1 CreateBitmap(byte[] bytes, int pitch, int width, int height)
+        {
             var props = new BitmapProperties1
             {
-                PixelFormat = new D2dPixelFormat(Vortice.DXGI.Format.B8G8R8A8_UNorm, D2dAlphaMode.Premultiplied),
+                PixelFormat = new D2dPixelFormat(Format.B8G8R8A8_UNorm, D2dAlphaMode.Premultiplied),
                 DpiX = 96,
                 DpiY = 96,
                 BitmapOptions = BitmapOptions.None,
@@ -198,45 +234,12 @@ public sealed class HandScene
             var handle = GCHandle.Alloc(bytes, GCHandleType.Pinned);
             try
             {
-                return Context.CreateBitmap(
-                    new Vortice.Mathematics.SizeI(w, h), handle.AddrOfPinnedObject(), (uint)pitch, props);
+                return Context.CreateBitmap(new Vortice.Mathematics.SizeI(width, height),
+                    handle.AddrOfPinnedObject(), (uint)pitch, props);
             }
             finally
             {
                 handle.Free();
-            }
-        }
-
-        /// <summary>GDI+ 32bppArgb lock (memory order BGRA, straight alpha) converted to
-        /// premultiplied BGRA for Direct2D.</summary>
-        private static (byte[] bytes, int pitch) PremultipliedBytes(Bitmap bitmap)
-        {
-            var data = bitmap.LockBits(new Rectangle(Point.Empty, bitmap.Size), ImageLockMode.ReadOnly,
-                System.Drawing.Imaging.PixelFormat.Format32bppArgb);
-            try
-            {
-                int pitch = data.Stride;
-                var bytes = new byte[pitch * bitmap.Height];
-                for (int y = 0; y < bitmap.Height; y++)
-                {
-                    int src = y * pitch;
-                    Marshal.Copy(new IntPtr(data.Scan0.ToInt64() + src), bytes, src, pitch);
-                }
-                // Premultiply B, G, R by A (GDI+ keeps straight alpha here).
-                for (int i = 0; i < bytes.Length; i += 4)
-                {
-                    byte a = bytes[i + 3];
-                    if (a == 0) { bytes[i] = bytes[i + 1] = bytes[i + 2] = 0; continue; }
-                    if (a == 255) continue;
-                    bytes[i + 0] = (byte)(bytes[i + 0] * a / 255);
-                    bytes[i + 1] = (byte)(bytes[i + 1] * a / 255);
-                    bytes[i + 2] = (byte)(bytes[i + 2] * a / 255);
-                }
-                return (bytes, pitch);
-            }
-            finally
-            {
-                bitmap.UnlockBits(data);
             }
         }
 
@@ -246,10 +249,31 @@ public sealed class HandScene
             {
                 foreach (var bitmap in _handCache.Values) bitmap.Dispose();
                 _handCache.Clear();
+                _handOrder.Clear();
+            }
+            lock (_shadowCache)
+            {
+                foreach (var bitmap in _shadowCache.Values) bitmap.Dispose();
+                _shadowCache.Clear();
+                _shadowOrder.Clear();
+            }
+            lock (_thumbnails)
+            {
+                foreach (var bitmap in _thumbnails.Values) bitmap.Dispose();
+                _thumbnails.Clear();
+            }
+            lock (_toolbarLock)
+            {
+                _toolbarBitmap?.Dispose();
+                _toolbarBitmap = null;
+                _toolbarContext?.Dispose();
+                _toolbarContext = null;
+                _toolbarKey = "";
             }
             ToolbarBg.Dispose();
             ToolbarBorder.Dispose();
-            ToolbarText.Dispose();
+            ToolbarHighlight.Dispose();
+            ToolbarIcon.Dispose();
             StatusBrush.Dispose();
             HudBg.Dispose();
             HudBorder.Dispose();
@@ -257,6 +281,9 @@ public sealed class HandScene
             ToastBg.Dispose();
             ToastBorder.Dispose();
             ToastText.Dispose();
+            LaserDot.Dispose();
+            LaserCore.Dispose();
+            LaserGlow.Dispose();
             RoundStroke.Dispose();
             Ink.Dispose();
             // Context is owned by OverlaySurface, not the scene resources.
@@ -279,14 +306,29 @@ public sealed class HandScene
         });
         ID2D1SolidColorBrush brush(float r, float g, float b, float a) =>
             context.CreateSolidColorBrush(new Color4(r, g, b, a));
+
+        var glowStops = context.CreateGradientStopCollection(
+        [
+            new GradientStop(0f, new Color4(1f, 0.16f, 0.12f, 0.55f)),
+            new GradientStop(0.55f, new Color4(1f, 0.16f, 0.12f, 0.18f)),
+            new GradientStop(1f, new Color4(1f, 0.16f, 0.12f, 0f)),
+        ], Gamma.StandardRgb, ExtendMode.Clamp);
+        var glow = context.CreateRadialGradientBrush(
+            new RadialGradientBrushProperties(Vector2.Zero, Vector2.Zero, 1, 1), new BrushProperties(1f), glowStops);
+        glowStops.Dispose();
+
         return new SceneResources
         {
             Context = context,
+            Factory = renderer.D2dFactory,
+            D2dDevice = renderer.D2dDevice,
             RoundStroke = roundStroke,
             Ink = new InkLayer(renderer, monitor, scale, inkColor),
-            ToolbarBg = brush(28 / 255f, 28 / 255f, 32 / 255f, 245 / 255f),
-            ToolbarBorder = brush(1, 1, 1, 1),
-            ToolbarText = brush(1, 1, 1, 1),
+            // macOS darkGlass: translucent dark panel, 16 pt radius, white 18 % hairline.
+            ToolbarBg = brush(24 / 255f, 24 / 255f, 28 / 255f, 214 / 255f),
+            ToolbarBorder = brush(1, 1, 1, 0.18f),
+            ToolbarHighlight = brush(1, 1, 1, 0.18f),
+            ToolbarIcon = brush(1, 1, 1, 0.85f),
             StatusBrush = brush(40 / 255f, 40 / 255f, 46 / 255f, 200 / 255f),
             HudBg = brush(20 / 255f, 20 / 255f, 26 / 255f, 220 / 255f),
             HudBorder = brush(244 / 255f, 51 / 255f, 118 / 255f, 1),
@@ -294,6 +336,9 @@ public sealed class HandScene
             ToastBg = brush(20 / 255f, 20 / 255f, 26 / 255f, 240 / 255f),
             ToastBorder = brush(244 / 255f, 51 / 255f, 118 / 255f, 1),
             ToastText = brush(1, 1, 1, 1),
+            LaserDot = brush(1f, 0.16f, 0.12f, 1f),
+            LaserCore = brush(1f, 0.86f, 0.82f, 0.95f),
+            LaserGlow = glow,
         };
     }
 
@@ -304,8 +349,6 @@ public sealed class HandScene
             if (Formats.TryGetValue((kind, scale), out var cached)) return cached;
             var (family, weight, size, align, para) = kind switch
             {
-                TextKind.Toolbar => ("Segoe UI", FontWeight.Bold, 15f * scale, TextAlignment.Center, ParagraphAlignment.Center),
-                TextKind.Status => ("Consolas", FontWeight.Normal, 12f, TextAlignment.Leading, ParagraphAlignment.Near),
                 TextKind.Toast => ("Segoe UI", FontWeight.Bold, 18f * scale, TextAlignment.Center, ParagraphAlignment.Center),
                 _ => ("Consolas", FontWeight.Bold, 13f * scale, TextAlignment.Center, ParagraphAlignment.Center),
             };
@@ -332,11 +375,12 @@ public sealed class HandScene
         float oy = -monitor.Bounds.Y;
 
         DrawInk(ctx, res, monitor);
-        DrawHand(ctx, res, scene, scale, ox, oy);
+        if (scene.HandVisible)
+            DrawPointer(ctx, res, monitor, scene, scale, ox, oy);
 
         if (scene.IsPrimary)
         {
-            DrawToolbar(ctx, res, scene.Toolbar, scale);
+            DrawToolbar(ctx, res, scene.Toolbar, scale, ox, oy);
             DrawToast(ctx, res, monitor, scene.Toast, scale);
             DrawStatus(ctx, res, monitor, scene.Status, scale);
             DrawHud(ctx, res, monitor, scene.FpsHud, scale);
@@ -352,33 +396,226 @@ public sealed class HandScene
         res.Ink.Draw(ctx, monitor);
     }
 
-    private static void DrawHand(ID2D1DeviceContext ctx, SceneResources res, in SceneSnapshot scene,
-        int scale, float ox, float oy)
-    {
-        var hand = res.HandBitmap(scale);
-        float h = hand.Size.Height;
-        float w = hand.Size.Width;
-        // Measured fingertip anchored at the cursor (macOS HandAsset.tip/tipX).
-        float x = scene.Cursor.X + ox - w * Hand.Value.TipX;
-        float y = scene.Cursor.Y + oy - h * Hand.Value.TipY;
+    // =====================================================================
+    // Pointer (hand or laser)
+    // =====================================================================
 
-        ctx.DrawBitmap(hand, new Rect(x, y, w, h), 1f, BitmapInterpolationMode.Linear, new Rect(0, 0, w, h));
+    private static void DrawPointer(ID2D1DeviceContext ctx, SceneResources res, MonitorInfo monitor,
+        in SceneSnapshot scene, int scale, float ox, float oy)
+    {
+        var cursor = new PointF(scene.Cursor.X, scene.Cursor.Y);
+        if (scene.Laser)
+        {
+            DrawLaser(ctx, res, monitor, cursor, scene.Press, ox, oy);
+            return;
+        }
+
+        var metrics = HandAssets.Metrics(scene.StyleId);
+        if (metrics is null) return;
+        var hand = res.HandBitmap(scene.StyleId, scale, metrics, monitor.Bounds.Height);
+        if (hand is null) return;
+
+        var pose = HandPoseSolver.Solve(cursor, monitor.Bounds, metrics, scene.Press, scene.GripX,
+            Preferences.ShowShadow);
+
+        // Sprite space → monitor-local space. The sprite is drawn upright: the hand part (the
+        // top of the PNG, fingertip first) sits at sprite y ∈ [0, HandLength] and the stem
+        // below it, so the fingertip ends up at the far end of the arm, on the cursor.
+        var transform = pose.SpriteTransform(metrics, ox, oy);
+
+        float bw = hand.Size.Width;
+        float bh = hand.Size.Height;
+        var handSource = new Rect(0, metrics.HandTop * bh, bw, metrics.HandSpan * bh);
+        var rodSource = new Rect(0, metrics.Wrist * bh, bw, metrics.RodSpan * bh);
+        var handDest = new Rect(0, 0, pose.Width, pose.HandLength);
+        var rodDest = new Rect(0, pose.HandLength, pose.Width, pose.RodLength);
+
+        // Drop shadow first: the pre-blurred silhouette, offset down-right by the lift.
+        if (pose.ShadowOpacity > 0 && res.ShadowBitmap(scene.StyleId, scale) is { } shadow)
+        {
+            float sw = shadow.Size.Width;
+            float sh = shadow.Size.Height;
+            var shadowTransform = transform * Matrix3x2.CreateTranslation(pose.ShadowDx, pose.ShadowDy);
+            ctx.Transform = shadowTransform;
+            ctx.DrawBitmap(shadow, handDest, pose.ShadowOpacity, BitmapInterpolationMode.Linear,
+                new Rect(0, metrics.HandTop * sh, sw, metrics.HandSpan * sh));
+            ctx.DrawBitmap(shadow, rodDest, pose.ShadowOpacity, BitmapInterpolationMode.Linear,
+                new Rect(0, metrics.Wrist * sh, sw, metrics.RodSpan * sh));
+        }
+
+        ctx.Transform = transform;
+        ctx.DrawBitmap(hand, handDest, 1f, BitmapInterpolationMode.Linear, handSource);
+        ctx.DrawBitmap(hand, rodDest, 1f, BitmapInterpolationMode.Linear, rodSource);
+        ctx.Transform = Matrix3x2.Identity;
     }
 
-    private static void DrawToolbar(ID2D1DeviceContext ctx, SceneResources res, List<ToolbarButton> buttons, int scale)
+    /// <summary>macOS <c>ArmView.aimLaser</c>: a red dot with a soft glow and a light core.</summary>
+    private static void DrawLaser(ID2D1DeviceContext ctx, SceneResources res, MonitorInfo monitor,
+        PointF cursor, float press, float ox, float oy)
     {
-        float border = 2f * Math.Max(1, scale);
-        foreach (var button in buttons)
+        float r = HandPoseSolver.LaserRadius(monitor.Bounds.Height, press);
+        float glow = HandPoseSolver.LaserGlowRadius(r, press);
+        var center = new Vector2(cursor.X + ox, cursor.Y + oy);
+
+        res.LaserGlow.Center = center;
+        res.LaserGlow.RadiusX = glow;
+        res.LaserGlow.RadiusY = glow;
+        ctx.FillEllipse(new Ellipse(center, glow, glow), res.LaserGlow);
+        ctx.FillEllipse(new Ellipse(center, r, r), res.LaserDot);
+        float core = r * 0.45f;
+        ctx.FillEllipse(new Ellipse(center, core, core), res.LaserCore);
+    }
+
+    // =====================================================================
+    // Toolbar
+    // =====================================================================
+
+    private static void DrawToolbar(ID2D1DeviceContext ctx, SceneResources res, ToolbarLayout layout, int scale,
+        float ox, float oy)
+    {
+        if (layout.Buttons.Count == 0) return;
+        var panel = layout.Panel;
+        string key = $"{panel}|{scale}|{Preferences.Style.Id}|{Preferences.SoundOn}|{res.ThumbnailCount}";
+        var cached = res.CachedToolbar(panel.Width, panel.Height, key,
+            target => PaintToolbar(target, res, layout, scale, panel));
+        if (cached is not null)
         {
-            var rect = new Rect(button.Rect.X, button.Rect.Y, button.Rect.Width, button.Rect.Height);
-            ctx.FillRectangle(rect, res.ToolbarBg);
-            ctx.DrawRectangle(rect, res.ToolbarBorder, border);
-            ctx.DrawText(button.Label, TextFormat(TextKind.Toolbar, scale), rect, res.ToolbarText);
+            var dest = new Rect(panel.X + ox, panel.Y + oy, panel.Width, panel.Height);
+            ctx.DrawBitmap(cached, dest, 1f, BitmapInterpolationMode.NearestNeighbor,
+                new Rect(0, 0, panel.Width, panel.Height));
+            return;
+        }
+        PaintToolbar(ctx, res, layout, scale, panel);
+    }
+
+    /// <summary>Paint the strip in panel-local coordinates (the cache target's origin).</summary>
+    private static void PaintToolbar(ID2D1DeviceContext ctx, SceneResources res, ToolbarLayout layout, int scale,
+        Rectangle panel)
+    {
+        float radius = ToolbarModel.RadiusPx * scale;
+        var rounded = new RoundedRectangle(new RectangleF(0, 0, panel.Width, panel.Height), radius, radius);
+        ctx.FillRoundedRectangle(rounded, res.ToolbarBg);
+        ctx.DrawRoundedRectangle(rounded, res.ToolbarBorder, 1.5f * scale);
+
+        float inset = 4 * scale;
+        foreach (var button in layout.Buttons)
+        {
+            var rect = new RectangleF(button.Rect.X - panel.X, button.Rect.Y - panel.Y,
+                button.Rect.Width, button.Rect.Height);
+            if (button.Selected)
+                ctx.FillRoundedRectangle(new RoundedRectangle(rect, 10 * scale, 10 * scale), res.ToolbarHighlight);
+
+            switch (button.Kind)
+            {
+                case ToolbarButtonKind.Style:
+                    DrawStyleIcon(ctx, res, button, rect, inset, scale);
+                    break;
+                case ToolbarButtonKind.Sound:
+                    DrawSoundIcon(ctx, res, rect, scale);
+                    break;
+                case ToolbarButtonKind.Exit:
+                    DrawExitIcon(ctx, res, rect, scale);
+                    break;
+            }
         }
     }
 
+    private static void DrawStyleIcon(ID2D1DeviceContext ctx, SceneResources res, ToolbarButton button,
+        RectangleF rect, float inset, int scale)
+    {
+        var style = PointerStyle.ById(button.Id);
+        if (style.IsLaser)
+        {
+            var center = new Vector2(rect.X + rect.Width / 2, rect.Y + rect.Height / 2);
+            float r = rect.Width * 0.16f;
+            float glow = r * 2.6f;
+            res.LaserGlow.Center = center;
+            res.LaserGlow.RadiusX = glow;
+            res.LaserGlow.RadiusY = glow;
+            ctx.FillEllipse(new Ellipse(center, glow, glow), res.LaserGlow);
+            ctx.FillEllipse(new Ellipse(center, r, r), res.LaserDot);
+            ctx.FillEllipse(new Ellipse(center, r * 0.45f, r * 0.45f), res.LaserCore);
+            return;
+        }
+
+        if (res.Thumbnail(button.Id) is { } thumb)
+        {
+            var dest = new Rect(rect.X + inset, rect.Y + inset, rect.Width - 2 * inset, rect.Height - 2 * inset);
+            ctx.DrawBitmap(thumb, dest, 1f, BitmapInterpolationMode.Linear,
+                new Rect(0, 0, thumb.Size.Width, thumb.Size.Height));
+            return;
+        }
+
+        // Thumbnail still decoding: a dot in the style's ink colour keeps the slot readable.
+        var dot = new Vector2(rect.X + rect.Width / 2, rect.Y + rect.Height / 2);
+        float radius = rect.Width * 0.22f;
+        using var brush = ctx.CreateSolidColorBrush(new Color4(
+            style.Ink.R / 255f, style.Ink.G / 255f, style.Ink.B / 255f, 1f));
+        ctx.FillEllipse(new Ellipse(dot, radius, radius), brush);
+    }
+
+    /// <summary>Speaker glyph: body + cone + two waves; a slash when muted.</summary>
+    private static void DrawSoundIcon(ID2D1DeviceContext ctx, SceneResources res, RectangleF rect, int scale)
+    {
+        float w = rect.Width;
+        float h = rect.Height;
+        float cx = rect.X + w / 2;
+        float cy = rect.Y + h / 2;
+        float u = w * 0.5f;
+        bool on = Preferences.SoundOn;
+
+        ctx.FillRectangle(new Rect(cx - u * 0.62f, cy - u * 0.16f, u * 0.26f, u * 0.32f), res.ToolbarIcon);
+        using (var cone = res.Factory.CreatePathGeometry())
+        {
+            using (var sink = cone.Open())
+            {
+                sink.BeginFigure(new Vector2(cx - u * 0.36f, cy - u * 0.16f), FigureBegin.Filled);
+                sink.AddLine(new Vector2(cx - u * 0.06f, cy - u * 0.46f));
+                sink.AddLine(new Vector2(cx - u * 0.06f, cy + u * 0.46f));
+                sink.AddLine(new Vector2(cx - u * 0.36f, cy + u * 0.16f));
+                sink.EndFigure(FigureEnd.Closed);
+                sink.Close();
+            }
+            ctx.FillGeometry(cone, res.ToolbarIcon);
+        }
+
+        float stroke = 2f * scale;
+        if (on)
+        {
+            ctx.DrawLine(new Vector2(cx + u * 0.08f, cy - u * 0.22f), new Vector2(cx + u * 0.30f, cy),
+                res.ToolbarIcon, stroke, res.RoundStroke);
+            ctx.DrawLine(new Vector2(cx + u * 0.30f, cy), new Vector2(cx + u * 0.08f, cy + u * 0.22f),
+                res.ToolbarIcon, stroke, res.RoundStroke);
+            ctx.DrawLine(new Vector2(cx + u * 0.24f, cy - u * 0.40f), new Vector2(cx + u * 0.52f, cy),
+                res.ToolbarIcon, stroke, res.RoundStroke);
+            ctx.DrawLine(new Vector2(cx + u * 0.52f, cy), new Vector2(cx + u * 0.24f, cy + u * 0.40f),
+                res.ToolbarIcon, stroke, res.RoundStroke);
+        }
+        else
+        {
+            ctx.DrawLine(new Vector2(cx + u * 0.10f, cy - u * 0.42f), new Vector2(cx + u * 0.52f, cy + u * 0.42f),
+                res.ToolbarIcon, stroke * 1.2f, res.RoundStroke);
+        }
+    }
+
+    private static void DrawExitIcon(ID2D1DeviceContext ctx, SceneResources res, RectangleF rect, int scale)
+    {
+        float cx = rect.X + rect.Width / 2;
+        float cy = rect.Y + rect.Height / 2;
+        float u = rect.Width * 0.22f;
+        float stroke = 2.4f * scale;
+        ctx.DrawLine(new Vector2(cx - u, cy - u), new Vector2(cx + u, cy + u),
+            res.ToolbarIcon, stroke, res.RoundStroke);
+        ctx.DrawLine(new Vector2(cx + u, cy - u), new Vector2(cx - u, cy + u),
+            res.ToolbarIcon, stroke, res.RoundStroke);
+    }
+
+    // =====================================================================
+    // Status / toast / HUD
+    // =====================================================================
+
     /// <summary>Transient feedback chip under the toolbar (hotkey changes: smoothing level,
-    /// fade, clear). Centred on the primary monitor so the current setting is obvious.</summary>
+    /// fade, clear, click-through mode).</summary>
     private static void DrawToast(ID2D1DeviceContext ctx, SceneResources res, MonitorInfo monitor, string text,
         int scale)
     {

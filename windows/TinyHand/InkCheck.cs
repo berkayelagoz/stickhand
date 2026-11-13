@@ -34,10 +34,10 @@ internal static class InkCheck
         int cy = primary.Bounds.Y + primary.Bounds.Height / 2;
         int scale = Math.Max(1, (int)Math.Round(primary.DpiX / 96.0, MidpointRounding.AwayFromZero));
         double fade = Preferences.FadeSeconds;
-        var ink = InkPalette.Resolve(Preferences.InkChoice, PointerStyle.Current);
+        var ink = InkPalette.Resolve(Preferences.InkChoice, Preferences.Style);
 
         Console.WriteLine($"inkcheck: display={mode?.width}x{mode?.height} @ {mode?.hz} Hz, dpi scale {scale}, " +
-            $"fade {fade}s, ink #{ink.R:X2}{ink.G:X2}{ink.B:X2} ({PointerStyle.Current.Id})");
+            $"fade {fade}s, ink #{ink.R:X2}{ink.G:X2}{ink.B:X2} ({Preferences.Style.Id})");
 
         // White backdrop: ink pixels are unambiguous against it. TopMost keeps it above a
         // terminal that may itself be always-on-top; the overlay windows are created later
@@ -116,9 +116,11 @@ internal static class InkCheck
         // be anchored by its top-centre, leaving the tip ~6 px left / ~14 px below).
         MoveTo(cx, cy - 100);
         Pump(300);
-        var tip = Capture(cx - 40, cy - 120, 80, 40);
-        Check("hand tip on cursor", Math.Abs(tip.TopRow - 20) <= 3 && Math.Abs(tip.TopCenterX - 40) <= 4,
-            $"topRow={tip.TopRow} (want 20) topCenterX={tip.TopCenterX} (want 40)");
+        var tip = Capture(cx - 40, cy - 140, 80, 80);
+        // The anchor is the finger centre h/200 below the topmost opaque row (macOS
+        // HandAsset.measure), so the nearest opaque pixel sits a few px off the cursor.
+        Check("hand tip on cursor", tip.NearestDistance >= 0 && tip.NearestDistance <= 10,
+            $"nearest ink pixel {tip.NearestDistance} px from the cursor");
 
         // 4. Live stroke: the blit region must include the stroke extent. It used to be the
         // centreline bounds, so the outer half of the stroke was clipped until the stroke
@@ -200,6 +202,15 @@ internal static class InkCheck
         return _failures == 0 ? 0 : 1;
     }
 
+    /// <summary>Pointer/ink pixel: coloured or dark (the neutral shadow is excluded).</summary>
+    private static bool IsPointer(Color c)
+    {
+        int max = Math.Max(c.R, Math.Max(c.G, c.B));
+        int min = Math.Min(c.R, Math.Min(c.G, c.B));
+        double luminance = 0.299 * c.R + 0.587 * c.G + 0.114 * c.B;
+        return max - min > 15 || luminance < 135;
+    }
+
     private static void Check(string name, bool ok, string detail)
     {
         Console.WriteLine($"  [{(ok ? "PASS" : "FAIL")}] {name} — {detail}");
@@ -209,31 +220,31 @@ internal static class InkCheck
     private static bool Near(Color a, Color b, int tolerance) =>
         Math.Abs(a.R - b.R) <= tolerance && Math.Abs(a.G - b.G) <= tolerance && Math.Abs(a.B - b.B) <= tolerance;
 
-    private readonly record struct CaptureResult(int Dark, Color Dominant, int TopRow, int TopCenterX);
+    private readonly record struct CaptureResult(int Dark, Color Dominant, int NearestDistance);
 
-    /// <summary>Screen pixels in the rect that are dark (ink/hand), the most common dark
-    /// colour, and the topmost dark row with its x-centre (hand-tip alignment check).</summary>
+    /// <summary>Screen pixels in the rect that are clearly darker than the white backdrop
+    /// (ink or hand; the 18 % shadow stays out), the most common such colour, and the
+    /// distance of the closest one to the rect centre (hand-tip alignment check).</summary>
     private static CaptureResult Capture(int x, int y, int width, int height)
     {
         using var bitmap = new Bitmap(width, height);
         using (var g = Graphics.FromImage(bitmap)) g.CopyFromScreen(x, y, 0, 0, new Size(width, height));
 
         int dark = 0;
-        int topRow = -1, topLo = -1, topHi = -1;
+        int nearest = int.MaxValue;
+        int centerX = width / 2, centerY = height / 2;
         var counts = new Dictionary<int, int>();
         for (int py = 0; py < height; py++)
         {
             for (int px = 0; px < width; px++)
             {
                 var c = bitmap.GetPixel(px, py);
-                if (c.R >= 100 || c.G >= 100 || c.B >= 100) continue;
+                // Coloured (the lavender hand and ink) or dark (the stem): the 18 % shadow
+                // over white is neutral grey and stays out, so counts track the sprite.
+                if (!IsPointer(c)) continue;
                 dark++;
-                if (topRow < 0) topRow = py;
-                if (py == topRow)
-                {
-                    if (topLo < 0) topLo = px;
-                    topHi = px;
-                }
+                int dx = px - centerX, dy = py - centerY;
+                nearest = Math.Min(nearest, (int)Math.Round(Math.Sqrt(dx * dx + dy * dy)));
                 int key = (c.R << 16) | (c.G << 8) | c.B;
                 counts[key] = counts.GetValueOrDefault(key) + 1;
             }
@@ -245,8 +256,7 @@ internal static class InkCheck
             var best = counts.MaxBy(kv => kv.Value);
             dominant = Color.FromArgb((best.Key >> 16) & 0xFF, (best.Key >> 8) & 0xFF, best.Key & 0xFF);
         }
-        int topCenterX = topRow < 0 ? -1 : (topLo + topHi) / 2;
-        return new CaptureResult(dark, dominant, topRow, topCenterX);
+        return new CaptureResult(dark, dominant, nearest == int.MaxValue ? -1 : nearest);
     }
 
     /// <summary>Debug: dark pixels per row of a capture (TH_INKCHECK_DEBUG=1).</summary>

@@ -211,6 +211,11 @@ public sealed class InkLayer : IDisposable
     /// <summary>True while a stroke is being painted into the live bitmap (diagnostics).</summary>
     public bool LiveActive => _liveActive;
 
+    /// <summary>Recolour the ink brush (M3: the toolbar pick changes the style, and
+    /// <see cref="InkChoice.Match"/> resolves to that style's colour).</summary>
+    public void SetColor(Color color) =>
+        _brush.Color = new Color4(color.R / 255f, color.G / 255f, color.B / 255f, 1f);
+
     /// <summary>True while a frozen stroke still has to fade: the compositor must keep
     /// rendering even when the pointer is idle, otherwise the fade would stall.</summary>
     public bool NeedsFrame

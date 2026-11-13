@@ -25,6 +25,12 @@ internal static class Program
         if (args.Contains("--inkcheck"))
             return InkCheck.Run(Rest(args));
 
+        if (args.Contains("--m3check"))
+            return M3Check.Run(Rest(args));
+
+        if (args.Contains("--toolbargeom"))
+            return M3Check.PrintGeometry();
+
         // .NET WinForms bootstrap (source-generated; HighDpiMode comes from
         // ApplicationHighDpiMode in the csproj, the manifest pins PerMonitorV2).
         ApplicationConfiguration.Initialize();
