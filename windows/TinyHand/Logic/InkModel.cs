@@ -278,6 +278,15 @@ public static class Preferences
 
     public static InkChoice InkChoice { get; } = InkChoice.Match;
 
+    private static int _smoothingLevel = (int)SmoothingLevel.Max;
+
+    /// <summary>Pointer smoothing strength; Ctrl+Alt+S cycles it at runtime.</summary>
+    public static SmoothingLevel SmoothingLevel
+    {
+        get => (SmoothingLevel)Volatile.Read(ref _smoothingLevel);
+        set => Volatile.Write(ref _smoothingLevel, (int)value);
+    }
+
     private static double ReadFadeSeconds()
     {
         string? raw = Environment.GetEnvironmentVariable("TH_FADE");

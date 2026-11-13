@@ -204,14 +204,27 @@ public class InkSmootherTests
     public void FirstPoint_IsReturnedUnchanged()
     {
         var smoother = new InkSmoother();
-        Assert.Equal(new Point(123, 456), smoother.Filter(new Point(123, 456), 0));
+        Assert.Equal(new Point(123, 456), smoother.Filter(new Point(123, 456), 0, SmoothingLevel.Max));
     }
 
     [Fact]
-    public void StationaryJitter_IsAttenuated()
+    public void Off_ReturnsRawPoints()
     {
         var smoother = new InkSmoother();
-        smoother.Filter(new Point(100, 100), 0);
+        smoother.Filter(new Point(0, 0), 0, SmoothingLevel.Max);
+        Assert.Equal(new Point(100, 100), smoother.Filter(new Point(100, 100), Dt, SmoothingLevel.Off));
+        Assert.Equal(new Point(101, 100), smoother.Filter(new Point(101, 100), 2 * Dt, SmoothingLevel.Off));
+    }
+
+    [Theory]
+    [InlineData(SmoothingLevel.Light)]
+    [InlineData(SmoothingLevel.Medium)]
+    [InlineData(SmoothingLevel.Strong)]
+    [InlineData(SmoothingLevel.Max)]
+    public void StationaryJitter_IsAttenuated(SmoothingLevel level)
+    {
+        var smoother = new InkSmoother();
+        smoother.Filter(new Point(100, 100), 0, level);
         double t = 0;
         int maxDeviation = 0;
         for (int i = 0; i < 200; i++)
@@ -219,18 +232,18 @@ public class InkSmootherTests
             t += Dt;
             // ±1 px hand jitter around a still pointer.
             var raw = new Point(100 + (i % 2 == 0 ? 1 : -1), 100 + (i % 3 == 0 ? 1 : -1));
-            var filtered = smoother.Filter(raw, t);
+            var filtered = smoother.Filter(raw, t, level);
             maxDeviation = Math.Max(maxDeviation, Math.Abs(filtered.X - 100));
             maxDeviation = Math.Max(maxDeviation, Math.Abs(filtered.Y - 100));
         }
-        Assert.True(maxDeviation <= 1, $"jitter leaked through: {maxDeviation} px");
+        Assert.True(maxDeviation <= 1, $"{level}: jitter leaked through: {maxDeviation} px");
     }
 
     [Fact]
     public void FastMovement_FollowsWithinAFewPixels()
     {
         var smoother = new InkSmoother();
-        smoother.Filter(new Point(100, 100), 0);
+        smoother.Filter(new Point(100, 100), 0, SmoothingLevel.Max);
         double t = 0;
         int rawX = 100;
         int filteredX = 100;
@@ -238,7 +251,7 @@ public class InkSmootherTests
         {
             t += Dt;
             rawX += 20; // 2500 px/s
-            filteredX = smoother.Filter(new Point(rawX, 100), t).X;
+            filteredX = smoother.Filter(new Point(rawX, 100), t, SmoothingLevel.Max).X;
         }
         Assert.InRange(rawX - filteredX, 0, 14);
     }
@@ -247,7 +260,7 @@ public class InkSmootherTests
     public void SlowMovement_IsSmoothedButFollows()
     {
         var smoother = new InkSmoother();
-        smoother.Filter(new Point(100, 100), 0);
+        smoother.Filter(new Point(100, 100), 0, SmoothingLevel.Max);
         double t = 0;
         int rawX = 100;
         int filteredX = 100;
@@ -255,7 +268,7 @@ public class InkSmootherTests
         {
             t += Dt;
             rawX += 1; // 125 px/s
-            filteredX = smoother.Filter(new Point(rawX, 100), t).X;
+            filteredX = smoother.Filter(new Point(rawX, 100), t, SmoothingLevel.Max).X;
             Assert.True(filteredX <= rawX, "the filter must not overshoot");
         }
         Assert.InRange(rawX - filteredX, 0, 13);
@@ -265,9 +278,38 @@ public class InkSmootherTests
     public void Reset_ForgetsThePreviousStroke()
     {
         var smoother = new InkSmoother();
-        smoother.Filter(new Point(0, 0), 0);
-        smoother.Filter(new Point(100, 100), Dt);
+        smoother.Filter(new Point(0, 0), 0, SmoothingLevel.Max);
+        smoother.Filter(new Point(100, 100), Dt, SmoothingLevel.Max);
         smoother.Reset();
-        Assert.Equal(new Point(500, 500), smoother.Filter(new Point(500, 500), 1));
+        Assert.Equal(new Point(500, 500), smoother.Filter(new Point(500, 500), 1, SmoothingLevel.Max));
+    }
+
+    [Fact]
+    public void Presets_CycleThroughEveryLevelAndWrap()
+    {
+        var level = SmoothingLevel.Off;
+        var seen = new List<SmoothingLevel>();
+        for (int i = 0; i < 5; i++)
+        {
+            seen.Add(level);
+            level = SmoothingPresets.Next(level);
+        }
+        Assert.Equal(
+            [SmoothingLevel.Off, SmoothingLevel.Light, SmoothingLevel.Medium, SmoothingLevel.Strong, SmoothingLevel.Max],
+            seen);
+        Assert.Equal(SmoothingLevel.Off, level); // wrapped
+    }
+
+    [Fact]
+    public void Presets_GetSmootherAsTheLevelRises()
+    {
+        double previousCutoff = double.PositiveInfinity;
+        foreach (var level in new[] { SmoothingLevel.Light, SmoothingLevel.Medium, SmoothingLevel.Strong, SmoothingLevel.Max })
+        {
+            var (minCutoff, beta) = SmoothingPresets.Of(level);
+            Assert.True(minCutoff < previousCutoff, $"{level} must be smoother than the previous level");
+            Assert.True(beta > 0);
+            previousCutoff = minCutoff;
+        }
     }
 }

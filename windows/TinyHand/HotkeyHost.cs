@@ -22,6 +22,9 @@ internal sealed class HotkeyHost : NativeWindow, IDisposable
     public const int FadeId = 4;
     public const uint FadeVk = 0x46; // 'F' — toggle the ink auto-fade
 
+    public const int SmoothId = 5;
+    public const uint SmoothVk = 0x53; // 'S' — cycle the pointer smoothing strength
+
     public event Action<int>? HotkeyPressed;
 
     public HotkeyHost()
@@ -41,12 +44,16 @@ internal sealed class HotkeyHost : NativeWindow, IDisposable
     public bool RegisterFade() =>
         User32.RegisterHotKey(Handle, FadeId, ToggleModifiers | Win32.MOD_NOREPEAT, FadeVk);
 
+    public bool RegisterSmooth() =>
+        User32.RegisterHotKey(Handle, SmoothId, ToggleModifiers | Win32.MOD_NOREPEAT, SmoothVk);
+
     public void Dispose()
     {
         User32.UnregisterHotKey(Handle, ToggleId);
         User32.UnregisterHotKey(Handle, QuitId);
         User32.UnregisterHotKey(Handle, ClearId);
         User32.UnregisterHotKey(Handle, FadeId);
+        User32.UnregisterHotKey(Handle, SmoothId);
         DestroyHandle();
     }
 

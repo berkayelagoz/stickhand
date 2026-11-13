@@ -39,6 +39,8 @@ internal sealed class AppHost : ApplicationContext
             Debug.WriteLine($"RegisterHotKey clear failed: {Marshal.GetLastWin32Error()}");
         if (!_hotkeys.RegisterFade())
             Debug.WriteLine($"RegisterHotKey fade failed: {Marshal.GetLastWin32Error()}");
+        if (!_hotkeys.RegisterSmooth())
+            Debug.WriteLine($"RegisterHotKey smooth failed: {Marshal.GetLastWin32Error()}");
 
         _toggleItem = new ToolStripMenuItem("Active (Ctrl+Alt+H)") { Checked = false, CheckOnClick = true };
         _toggleItem.Click += (_, _) => Toggle();
@@ -88,6 +90,10 @@ internal sealed class AppHost : ApplicationContext
             case HotkeyHost.FadeId:
                 // Toggle the per-stroke auto-fade; off keeps the ink on screen.
                 _controller.ToggleFade();
+                break;
+            case HotkeyHost.SmoothId:
+                // Cycle the pointer smoothing strength (off → light → … → max).
+                _controller.ToggleSmoothing();
                 break;
         }
     }

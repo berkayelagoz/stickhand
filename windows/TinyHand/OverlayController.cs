@@ -604,9 +604,10 @@ private void RenderFrame(bool busy)
             var mouseStats = _hooks?.MouseStats.TakeSnapshot();
             var kbdStats = _hooks?.KeyboardStats.TakeSnapshot();
             string fade = Preferences.FadeSeconds > 0 ? $"fade {Preferences.FadeSeconds:0.#}s" : "fade off";
+            string smooth = $"smooth {SmoothingPresets.Title(Preferences.SmoothingLevel)}";
             _status = busy
-                ? $"TinyHand M2 | mode {(_clickThrough ? "click-through" : "draw")} | {_fps} fps | mouse cb p95 {mouseStats?.P95Ms ?? 0:0.000} ms | kbd cb p95 {kbdStats?.P95Ms ?? 0:0.000} ms | strokes {Volatile.Read(ref _strokeCount)} | ink #{InkColor.R:X2}{InkColor.G:X2}{InkColor.B:X2} | {fade} | Ctrl+Alt+X clear | Ctrl+Alt+F fade | Ctrl+Alt+H toggle | Esc close | Ctrl+Alt+Q exit app"
-                : $"TinyHand M2 | mode {(_clickThrough ? "click-through" : "draw")} | {_fps} fps | ink #{InkColor.R:X2}{InkColor.G:X2}{InkColor.B:X2} | {fade} | Ctrl+Alt+X clear | Ctrl+Alt+F fade | Ctrl+Alt+H toggle | Esc close | Ctrl+Alt+Q exit app";
+                ? $"TinyHand M2 | mode {(_clickThrough ? "click-through" : "draw")} | {_fps} fps | mouse cb p95 {mouseStats?.P95Ms ?? 0:0.000} ms | kbd cb p95 {kbdStats?.P95Ms ?? 0:0.000} ms | strokes {Volatile.Read(ref _strokeCount)} | ink #{InkColor.R:X2}{InkColor.G:X2}{InkColor.B:X2} | {fade} | {smooth} | Ctrl+Alt+X clear | Ctrl+Alt+F fade | Ctrl+Alt+S smooth | Ctrl+Alt+H toggle | Esc close | Ctrl+Alt+Q exit app"
+                : $"TinyHand M2 | mode {(_clickThrough ? "click-through" : "draw")} | {_fps} fps | ink #{InkColor.R:X2}{InkColor.G:X2}{InkColor.B:X2} | {fade} | {smooth} | Ctrl+Alt+X clear | Ctrl+Alt+F fade | Ctrl+Alt+S smooth | Ctrl+Alt+H toggle | Esc close | Ctrl+Alt+Q exit app";
             _statusRefreshAt = now + 250;
 
             var stats = FrameStatsSnapshot();
@@ -776,7 +777,7 @@ private void RenderFrame(bool busy)
             _smoother.Reset();
             _downPoint = _smoother.Filter(
                 new Point((int)Interlocked.Read(ref _cursorX), (int)Interlocked.Read(ref _cursorY)),
-                _clock.Elapsed.TotalSeconds);
+                _clock.Elapsed.TotalSeconds, Preferences.SmoothingLevel);
             _lastInkPoint = _downPoint;
             _strokeStarted = false;
             _dirty = true;
@@ -907,7 +908,9 @@ private void RenderFrame(bool busy)
     /// the line; <paramref name="raw"/> skips the filter for the release catch-up.</summary>
     private void AppendStroke(int x, int y, bool raw = false)
     {
-        var to = raw ? new Point(x, y) : _smoother.Filter(new Point(x, y), _clock.Elapsed.TotalSeconds);
+        var to = raw
+            ? new Point(x, y)
+            : _smoother.Filter(new Point(x, y), _clock.Elapsed.TotalSeconds, Preferences.SmoothingLevel);
         int scale = PrimaryScale();
         if (!_strokeStarted)
         {
@@ -947,6 +950,13 @@ private void RenderFrame(bool busy)
     public void ToggleFade()
     {
         Preferences.FadeSeconds = Preferences.FadeSeconds > 0 ? 0 : Preferences.DefaultFadeSeconds;
+        _dirty = true;
+    }
+
+    /// <summary>Ctrl+Alt+S: cycle the pointer smoothing strength (off → light → … → max).</summary>
+    public void ToggleSmoothing()
+    {
+        Preferences.SmoothingLevel = SmoothingPresets.Next(Preferences.SmoothingLevel);
         _dirty = true;
     }
 

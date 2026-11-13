@@ -20,6 +20,7 @@ internal static class InkCheck
     private const byte VkMenu = 0x12;
     private const byte VkX = 0x58;
     private const byte VkF = 0x46;
+    private const byte VkS = 0x53;
 
     private static int _failures;
 
@@ -64,11 +65,14 @@ internal static class InkCheck
         {
             if (id == HotkeyHost.ClearId) controller.ClearInk();
             if (id == HotkeyHost.FadeId) controller.ToggleFade();
+            if (id == HotkeyHost.SmoothId) controller.ToggleSmoothing();
         };
         if (!hotkeys.RegisterClear())
             Console.WriteLine("  WARN: RegisterHotKey Ctrl+Alt+X failed");
         if (!hotkeys.RegisterFade())
             Console.WriteLine("  WARN: RegisterHotKey Ctrl+Alt+F failed");
+        if (!hotkeys.RegisterSmooth())
+            Console.WriteLine("  WARN: RegisterHotKey Ctrl+Alt+S failed");
         controller.SetActive(true);
         Pump(1500);
 
@@ -179,6 +183,13 @@ internal static class InkCheck
         Pump(4600);
         var fadedStroke = Capture(cx - 300, cy + 80, 200, 40);
         Check("ink fades after toggle", fadedStroke.Dark == 0, $"dark={fadedStroke.Dark}");
+
+        // 8. Ctrl+Alt+S cycles the smoothing strength.
+        var smoothBefore = Preferences.SmoothingLevel;
+        InjectSmoothHotkey();
+        Pump(200);
+        Check("Ctrl+Alt+S cycles smoothing", Preferences.SmoothingLevel != smoothBefore,
+            $"{SmoothingPresets.Title(smoothBefore)} -> {SmoothingPresets.Title(Preferences.SmoothingLevel)}");
 
         controller.SetActive(false);
         Pump(300);
@@ -334,6 +345,16 @@ internal static class InkCheck
         Key(VkMenu, true);
         Key(VkF, true);
         Key(VkF, false);
+        Key(VkMenu, false);
+        Key(VkControl, false);
+    }
+
+    private static void InjectSmoothHotkey()
+    {
+        Key(VkControl, true);
+        Key(VkMenu, true);
+        Key(VkS, true);
+        Key(VkS, false);
         Key(VkMenu, false);
         Key(VkControl, false);
     }

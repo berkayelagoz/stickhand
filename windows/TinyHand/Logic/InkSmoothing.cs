@@ -2,22 +2,56 @@ using System.Drawing;
 
 namespace TinyHand.Logic;
 
+/// <summary>Smoothing strength, cycled at runtime with Ctrl+Alt+S.</summary>
+public enum SmoothingLevel
+{
+    Off,
+    Light,
+    Medium,
+    Strong,
+    Max,
+}
+
+/// <summary>One Euro presets per level: (minCutoff Hz, beta Hz per px/s).</summary>
+public static class SmoothingPresets
+{
+    public static (double MinCutoff, double Beta) Of(SmoothingLevel level) => level switch
+    {
+        SmoothingLevel.Light => (1.0, 0.05),
+        SmoothingLevel.Medium => (0.5, 0.03),
+        SmoothingLevel.Strong => (0.3, 0.02),
+        _ => (0.15, 0.015), // Max; Off bypasses the filter entirely
+    };
+
+    public static SmoothingLevel Next(SmoothingLevel level) => level switch
+    {
+        SmoothingLevel.Off => SmoothingLevel.Light,
+        SmoothingLevel.Light => SmoothingLevel.Medium,
+        SmoothingLevel.Medium => SmoothingLevel.Strong,
+        SmoothingLevel.Strong => SmoothingLevel.Max,
+        _ => SmoothingLevel.Off,
+    };
+
+    public static string Title(SmoothingLevel level) => level switch
+    {
+        SmoothingLevel.Off => "off",
+        SmoothingLevel.Light => "light",
+        SmoothingLevel.Medium => "medium",
+        SmoothingLevel.Strong => "strong",
+        _ => "max",
+    };
+}
+
 /// <summary>
 /// One Euro filter (Casiez, Roussel &amp; Vogel 2012) for pointer input. A first-order
-/// low-pass whose cutoff rises with speed: at rest the cutoff is ~1 Hz, so the hand's
-/// jitter is attenuated to a few percent and tiny mouse movements no longer wobble the
-/// stroke; at speed the cutoff rises, keeping the lag around 3 px instead of trailing the
-/// cursor. Applied per axis with the same timestamps, so it is independent of the mouse
-/// report rate (125 Hz .. 1000 Hz).
+/// low-pass whose cutoff rises with speed: at rest the cutoff is low, so the hand's jitter
+/// is attenuated to a few percent and tiny mouse movements no longer wobble the stroke; at
+/// speed the cutoff rises, keeping the lag bounded instead of trailing the cursor. Applied
+/// per axis with the same timestamps, so it is independent of the mouse report rate
+/// (125 Hz .. 1000 Hz). The strength comes from <see cref="SmoothingPresets"/>.
 /// </summary>
 public sealed class InkSmoother
 {
-    /// <summary>Cutoff at rest (Hz): lower = smoother, but slower to start moving.</summary>
-    public const double MinCutoff = 0.15;
-
-    /// <summary>Speed coefficient (Hz per px/s): higher = more responsive at speed.</summary>
-    public const double Beta = 0.015;
-
     /// <summary>Cutoff of the derivative low-pass (Hz): smooths the speed estimate.</summary>
     public const double DerivativeCutoff = 1.0;
 
@@ -30,8 +64,15 @@ public sealed class InkSmoother
     public void Reset() => _started = false;
 
     /// <summary>Filter one raw pointer sample taken at <paramref name="nowSeconds"/>.</summary>
-    public Point Filter(Point raw, double nowSeconds)
+    public Point Filter(Point raw, double nowSeconds, SmoothingLevel level)
     {
+        if (level == SmoothingLevel.Off)
+        {
+            _started = false; // switching back on starts fresh at the current point
+            return raw;
+        }
+
+        var (minCutoff, beta) = SmoothingPresets.Of(level);
         if (!_started)
         {
             _x = raw.X;
@@ -50,8 +91,8 @@ public sealed class InkSmoother
         _dx = LowPass((raw.X - _x) / dt, Alpha(DerivativeCutoff, dt), _dx);
         _dy = LowPass((raw.Y - _y) / dt, Alpha(DerivativeCutoff, dt), _dy);
 
-        _x = LowPass(raw.X, Alpha(MinCutoff + Beta * Math.Abs(_dx), dt), _x);
-        _y = LowPass(raw.Y, Alpha(MinCutoff + Beta * Math.Abs(_dy), dt), _y);
+        _x = LowPass(raw.X, Alpha(minCutoff + beta * Math.Abs(_dx), dt), _x);
+        _y = LowPass(raw.Y, Alpha(minCutoff + beta * Math.Abs(_dy), dt), _y);
         return new Point((int)Math.Round(_x), (int)Math.Round(_y));
     }
 
