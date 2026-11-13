@@ -47,7 +47,7 @@ public static class HandAssets
     private static readonly object Gate = new();
     private static readonly Dictionary<string, HandMetrics> MetricsCache = new();
     private static readonly Dictionary<string, Bitmap> ThumbnailCache = new();
-    private static readonly Dictionary<(string Style, int ScreenHeight), ShadowSet> ShadowCache = new();
+    private static readonly Dictionary<(string Style, int ScreenHeight), ShadowSprite> ShadowCache = new();
     private static readonly Dictionary<string, Bitmap> FullCache = new();
     private static readonly List<string> FullOrder = new();
 
@@ -149,12 +149,7 @@ public static class HandAssets
     /// the shadow is cut at the sprite edges (the fingertip lost its shadow when pressed).</summary>
     public sealed record ShadowSprite(Bitmap Bitmap, int Padding);
 
-    /// <summary>Two pre-blurred silhouettes: the soft one for the resting hand (large lift) and
-    /// the tight one for the pressed hand. The scene cross-fades them by the pose's shadow
-    /// radius, so the shadow tightens with the press instead of staying a soft blob.</summary>
-    public sealed record ShadowSet(ShadowSprite Soft, ShadowSprite Tight);
-
-    public static ShadowSet? Shadow(string styleId, int screenHeight)
+    public static ShadowSprite? Shadow(string styleId, int screenHeight)
     {
         var key = (styleId, screenHeight);
         lock (Gate)
@@ -167,21 +162,18 @@ public static class HandAssets
         var metrics = Metrics(styleId);
         if (metrics is null) return null;
 
-        // The macOS radius range: rest (press 0) → full press (press 1). The radius is in
-        // screen pixels, so the sprite-space blur depends on the monitor height.
-        var soft = BuildShadow(sprite, metrics, HandPoseSolver.ShadowRadius(screenHeight, 0), screenHeight);
-        var tight = BuildShadow(sprite, metrics, HandPoseSolver.ShadowRadius(screenHeight, 1), screenHeight);
-        var set = new ShadowSet(soft, tight);
+        // One tight silhouette for every lift: the radius is in screen pixels, so the
+        // sprite-space blur depends on the monitor height.
+        var shadow = BuildShadow(sprite, metrics, HandPoseSolver.ShadowRadius(screenHeight), screenHeight);
         lock (Gate)
         {
             if (ShadowCache.TryGetValue(key, out var raced))
             {
-                soft.Bitmap.Dispose();
-                tight.Bitmap.Dispose();
+                shadow.Bitmap.Dispose();
                 return raced;
             }
-            ShadowCache[key] = set;
-            return set;
+            ShadowCache[key] = shadow;
+            return shadow;
         }
     }
 

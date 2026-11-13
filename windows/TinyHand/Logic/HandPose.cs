@@ -13,7 +13,6 @@ public sealed record HandPose(
     float Lift,
     float ShadowDx,
     float ShadowDy,
-    float ShadowRadius,
     float ShadowOpacity,
     PointF Tip)
 {
@@ -127,7 +126,6 @@ public static class HandPoseSolver
         // rotation: the shadow keeps a fixed screen-space direction (down-right).
         float shadowDx = lift * 0.6f;
         float shadowDy = lift;
-        float shadowRadius = ShadowRadius(screenH, press);
         float shadowOpacity = showShadow ? 0.26f + 0.02f * press : 0;
 
         float cos = MathF.Cos(rotation);
@@ -146,19 +144,19 @@ public static class HandPoseSolver
             Lift: lift,
             ShadowDx: shadowDx,
             ShadowDy: shadowDy,
-            ShadowRadius: shadowRadius,
             ShadowOpacity: shadowOpacity,
             Tip: tip);
     }
 
-    /// <summary><c>ArmView.aim</c> shadow radius: <c>max(1, lift × 0.35) + 5 × press</c>. The
-    /// shadow tightens as the hand presses down (45 px → 14 px on a 4K screen), which is what
-    /// keeps its silhouette hand-shaped instead of a soft blob.</summary>
-    public static float ShadowRadius(float screenH, float press)
-    {
-        float lift = LiftFrac * screenH * (1 - PressLiftShrink * press);
-        return MathF.Max(1, lift * 0.35f) + 5 * press;
-    }
+    /// <summary>
+    /// Shadow blur radius. macOS uses <c>max(1, lift × 0.35) + 5 × press</c> (45 px → 14 px on
+    /// 4K), but the resting 45 px blur turns the shadow into a blob that no longer resembles
+    /// the hand. Windows keeps the tight full-press radius at all times (user request,
+    /// 14 Kasım 2026) so the shadow always reads as the hand's silhouette; the lift still
+    /// moves and darkens it.
+    /// </summary>
+    public static float ShadowRadius(float screenH) =>
+        MathF.Max(1, LiftFrac * screenH * (1 - PressLiftShrink) * 0.35f) + 5;
 
     /// <summary><c>ArmView.aimLaser</c>: <c>max(4, screenH × 0.0038 × size/0.13) × (1 + 0.2 × press)</c>.</summary>
     public static float LaserRadius(float screenH, float press) =>
