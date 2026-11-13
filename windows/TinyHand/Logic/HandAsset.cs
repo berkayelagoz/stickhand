@@ -47,7 +47,7 @@ public static class HandAssets
     private static readonly object Gate = new();
     private static readonly Dictionary<string, HandMetrics> MetricsCache = new();
     private static readonly Dictionary<string, Bitmap> ThumbnailCache = new();
-    private static readonly Dictionary<string, ShadowSprite> ShadowCache = new();
+    private static readonly Dictionary<(string Style, int ScreenHeight), ShadowSet> ShadowCache = new();
     private static readonly Dictionary<string, Bitmap> FullCache = new();
     private static readonly List<string> FullOrder = new();
 
@@ -149,11 +149,17 @@ public static class HandAssets
     /// the shadow is cut at the sprite edges (the fingertip lost its shadow when pressed).</summary>
     public sealed record ShadowSprite(Bitmap Bitmap, int Padding);
 
-    public static ShadowSprite? Shadow(string styleId)
+    /// <summary>Two pre-blurred silhouettes: the soft one for the resting hand (large lift) and
+    /// the tight one for the pressed hand. The scene cross-fades them by the pose's shadow
+    /// radius, so the shadow tightens with the press instead of staying a soft blob.</summary>
+    public sealed record ShadowSet(ShadowSprite Soft, ShadowSprite Tight);
+
+    public static ShadowSet? Shadow(string styleId, int screenHeight)
     {
+        var key = (styleId, screenHeight);
         lock (Gate)
         {
-            if (ShadowCache.TryGetValue(styleId, out var cached)) return cached;
+            if (ShadowCache.TryGetValue(key, out var cached)) return cached;
         }
 
         var sprite = Sprite(styleId);
@@ -161,16 +167,21 @@ public static class HandAssets
         var metrics = Metrics(styleId);
         if (metrics is null) return null;
 
-        var shadow = BuildShadow(sprite, metrics);
+        // The macOS radius range: rest (press 0) → full press (press 1). The radius is in
+        // screen pixels, so the sprite-space blur depends on the monitor height.
+        var soft = BuildShadow(sprite, metrics, HandPoseSolver.ShadowRadius(screenHeight, 0), screenHeight);
+        var tight = BuildShadow(sprite, metrics, HandPoseSolver.ShadowRadius(screenHeight, 1), screenHeight);
+        var set = new ShadowSet(soft, tight);
         lock (Gate)
         {
-            if (ShadowCache.TryGetValue(styleId, out var raced))
+            if (ShadowCache.TryGetValue(key, out var raced))
             {
-                shadow.Bitmap.Dispose();
+                soft.Bitmap.Dispose();
+                tight.Bitmap.Dispose();
                 return raced;
             }
-            ShadowCache[styleId] = shadow;
-            return shadow;
+            ShadowCache[key] = set;
+            return set;
         }
     }
 
@@ -342,15 +353,17 @@ public static class HandAssets
     /// pose's shadow radius (<c>lift × 0.35</c> with <c>lift = 0.06 × screenH</c>) expressed in
     /// sprite pixels, so the on-screen softness matches the macOS CALayer shadow at any
     /// resolution.</summary>
-    private static ShadowSprite BuildShadow(Bitmap sprite, HandMetrics metrics)
+    private static ShadowSprite BuildShadow(Bitmap sprite, HandMetrics metrics, float radiusScreen,
+        int screenHeight)
     {
         int sw = Math.Max(1, sprite.Width / ShadowDivisor);
         int sh = Math.Max(1, sprite.Height / ShadowDivisor);
 
-        // lift = LiftFrac × screenH; the hand part is drawn at PointerSize × screenH tall for
-        // HandSpan × spriteHeight pixels, so sprite px per screen px = HandSpan × h / PointerSize.
-        float spritePxPerScreenPx = metrics.HandSpan * sprite.Height / (float)Preferences.PointerSize;
-        float radiusAsset = HandPoseSolver.LiftFrac * 0.35f * spritePxPerScreenPx;
+        // The hand part is drawn at PointerSize × screenH tall for HandSpan × spriteHeight
+        // pixels, so sprite px per screen px = HandSpan × h / (PointerSize × screenH).
+        float spritePxPerScreenPx = metrics.HandSpan * sprite.Height
+            / (Preferences.PointerSize * Math.Max(1, screenHeight));
+        float radiusAsset = radiusScreen * spritePxPerScreenPx;
         int radius = Math.Max(1, (int)Math.Round(radiusAsset / ShadowDivisor));
 
         // Transparent margin so the blur can spread past the sprite edges (three box passes

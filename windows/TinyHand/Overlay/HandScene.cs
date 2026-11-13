@@ -100,9 +100,13 @@ public sealed class HandScene
 
         private readonly Dictionary<(string Style, int Scale), ID2D1Bitmap1> _handCache = new();
         private readonly List<(string Style, int Scale)> _handOrder = [];
-        /// <summary>Shadow bitmap plus the transparent padding around the silhouette (in
-        /// shadow-bitmap pixels) that the blur spreads into.</summary>
-        public sealed record ShadowTarget(ID2D1Bitmap1 Bitmap, int Padding);
+        /// <summary>One pre-blurred shadow level: the bitmap plus the transparent padding
+        /// around the silhouette (in shadow-bitmap pixels) that the blur spreads into.</summary>
+        public sealed record ShadowLevel(ID2D1Bitmap1 Bitmap, int Padding);
+
+        /// <summary>Soft (resting hand) and tight (pressed hand) shadow levels; the scene
+        /// cross-fades them by the pose's shadow radius.</summary>
+        public sealed record ShadowTarget(ShadowLevel Soft, ShadowLevel Tight);
 
         private readonly Dictionary<(string Style, int Scale), ShadowTarget> _shadowCache = new();
         private readonly List<(string Style, int Scale)> _shadowOrder = [];
@@ -188,29 +192,38 @@ public sealed class HandScene
             }
         }
 
-        /// <summary>Pre-blurred silhouette for the hand's drop shadow (1/4 sprite resolution,
+        /// <summary>Pre-blurred silhouettes for the hand's drop shadow (1/4 sprite resolution,
         /// padded so the blur is not cut at the sprite edges).</summary>
-        public ShadowTarget? ShadowBitmap(string styleId, int scale)
+        public ShadowTarget? ShadowBitmap(string styleId, int scale, int screenHeight)
         {
             var key = (styleId, scale);
             lock (_shadowCache)
             {
                 if (_shadowCache.TryGetValue(key, out var cached)) return cached;
-                var shadow = HandAssets.Shadow(styleId);
+                var shadow = HandAssets.Shadow(styleId, screenHeight);
                 if (shadow is null) return null;
-                var (bytes, pitch) = HandAssets.PremultipliedBytes(shadow.Bitmap);
-                var bitmap = CreateBitmap(bytes, pitch, shadow.Bitmap.Width, shadow.Bitmap.Height);
-                var target = new ShadowTarget(bitmap, shadow.Padding);
+                var target = new ShadowTarget(CreateShadowLevel(shadow.Soft), CreateShadowLevel(shadow.Tight));
                 _shadowCache[key] = target;
                 _shadowOrder.Add(key);
                 while (_shadowOrder.Count > HandCacheLimit)
                 {
                     var evicted = _shadowOrder[0];
                     _shadowOrder.RemoveAt(0);
-                    if (_shadowCache.Remove(evicted, out var stale)) stale.Bitmap.Dispose();
+                    if (_shadowCache.Remove(evicted, out var stale))
+                    {
+                        stale.Soft.Bitmap.Dispose();
+                        stale.Tight.Bitmap.Dispose();
+                    }
                 }
                 return target;
             }
+        }
+
+        private ShadowLevel CreateShadowLevel(HandAssets.ShadowSprite sprite)
+        {
+            var (bytes, pitch) = HandAssets.PremultipliedBytes(sprite.Bitmap);
+            return new ShadowLevel(CreateBitmap(bytes, pitch, sprite.Bitmap.Width, sprite.Bitmap.Height),
+                sprite.Padding);
         }
 
         /// <summary>Toolbar thumbnail for a style (null until the background preload finishes).</summary>
@@ -259,7 +272,11 @@ public sealed class HandScene
             }
             lock (_shadowCache)
             {
-                foreach (var target in _shadowCache.Values) target.Bitmap.Dispose();
+                foreach (var target in _shadowCache.Values)
+                {
+                    target.Soft.Bitmap.Dispose();
+                    target.Tight.Bitmap.Dispose();
+                }
                 _shadowCache.Clear();
                 _shadowOrder.Clear();
             }
@@ -439,28 +456,41 @@ public sealed class HandScene
         // Drop shadow first: the pre-blurred silhouette, offset down-right by the lift. The
         // source and destination rects are expanded by the sprite's transparent padding so the
         // blur spill is drawn too — cropping it at the hand part's edge left the fingertip
-        // without a shadow when the hand pressed down.
-        if (pose.ShadowOpacity > 0 && res.ShadowBitmap(scene.StyleId, scale) is { } shadow)
+        // without a shadow when the hand pressed down. The blur radius follows the press
+        // (macOS 45 px → 14 px on 4K): the soft and tight levels are cross-faded so the shadow
+        // keeps the hand's silhouette instead of staying a blob.
+        if (pose.ShadowOpacity > 0
+            && res.ShadowBitmap(scene.StyleId, scale, monitor.Bounds.Height) is { } shadow)
         {
-            float pad = shadow.Padding;
-            float sw = shadow.Bitmap.Size.Width - 2 * pad;
-            float sh = shadow.Bitmap.Size.Height - 2 * pad;
-            var shadowTransform = transform * Matrix3x2.CreateTranslation(pose.ShadowDx, pose.ShadowDy);
-            ctx.Transform = shadowTransform;
-            var (handShadowSource, handShadowDest) = ShadowPart(pad, sw, sh,
-                metrics.HandTop * sh, metrics.HandSpan * sh, 0, pose.HandLength, pose.Width);
-            var (rodShadowSource, rodShadowDest) = ShadowPart(pad, sw, sh,
-                metrics.Wrist * sh, metrics.RodSpan * sh, pose.HandLength, pose.RodLength, pose.Width);
-            ctx.DrawBitmap(shadow.Bitmap, handShadowDest, pose.ShadowOpacity,
-                BitmapInterpolationMode.Linear, handShadowSource);
-            ctx.DrawBitmap(shadow.Bitmap, rodShadowDest, pose.ShadowOpacity,
-                BitmapInterpolationMode.Linear, rodShadowSource);
+            float softRadius = HandPoseSolver.ShadowRadius(monitor.Bounds.Height, 0);
+            float tightRadius = HandPoseSolver.ShadowRadius(monitor.Bounds.Height, 1);
+            float t = Math.Clamp((softRadius - pose.ShadowRadius) / MathF.Max(0.001f, softRadius - tightRadius),
+                0f, 1f);
+            ctx.Transform = transform * Matrix3x2.CreateTranslation(pose.ShadowDx, pose.ShadowDy);
+            DrawShadowLevel(ctx, shadow.Soft, pose.ShadowOpacity * (1 - t), metrics, pose);
+            DrawShadowLevel(ctx, shadow.Tight, pose.ShadowOpacity * t, metrics, pose);
         }
 
         ctx.Transform = transform;
         ctx.DrawBitmap(hand, handDest, 1f, BitmapInterpolationMode.Linear, handSource);
         ctx.DrawBitmap(hand, rodDest, 1f, BitmapInterpolationMode.Linear, rodSource);
         ctx.Transform = Matrix3x2.Identity;
+    }
+
+    /// <summary>Blit one shadow level (hand part + stem part) with the current transform.</summary>
+    private static void DrawShadowLevel(ID2D1DeviceContext ctx, SceneResources.ShadowLevel level,
+        float opacity, HandMetrics metrics, HandPose pose)
+    {
+        if (opacity <= 0.001f) return;
+        float pad = level.Padding;
+        float sw = level.Bitmap.Size.Width - 2 * pad;
+        float sh = level.Bitmap.Size.Height - 2 * pad;
+        var (handSource, handDest) = ShadowPart(pad, sw, sh,
+            metrics.HandTop * sh, metrics.HandSpan * sh, 0, pose.HandLength, pose.Width);
+        var (rodSource, rodDest) = ShadowPart(pad, sw, sh,
+            metrics.Wrist * sh, metrics.RodSpan * sh, pose.HandLength, pose.RodLength, pose.Width);
+        ctx.DrawBitmap(level.Bitmap, handDest, opacity, BitmapInterpolationMode.Linear, handSource);
+        ctx.DrawBitmap(level.Bitmap, rodDest, opacity, BitmapInterpolationMode.Linear, rodSource);
     }
 
     /// <summary>Source/destination rects for one shadow part, expanded by the sprite padding so

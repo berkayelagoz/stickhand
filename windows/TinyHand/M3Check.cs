@@ -144,10 +144,17 @@ internal static class M3Check
         int pressedShadow = Shadow(cx - 60, cy - 260, 120, 120);
         // The drop shadow must wrap the fingertip: the blur spill above the hand part used to
         // be cropped, so the tip looked unshadowed exactly when the hand pressed down.
-        Check("shadow hugs the fingertip when pressed", pressedShadow > 2000,
-            $"shadow={pressedShadow}");
-        Check("shadow tightens on press", pressedShadow > restShadow * 2,
-            $"rest={restShadow} pressed={pressedShadow}");
+        Check("shadow visible when pressed", pressedShadow > 200, $"shadow={pressedShadow}");
+        // And it must keep the hand's silhouette: the blur radius follows the press (macOS
+        // 45 px → 14 px), so the shadow stays a tight halo instead of a soft blob.
+        // Measured over the hand's own body (tip → 200 px down): the stem's shadow band is
+        // stretched with the stem, so its ends fade over a longer distance further down.
+        // The spread includes the shadow's own offset (15, 26 px at press) plus the blur
+        // (~21 px), so a tight, hand-shaped shadow lands around 30-40 px; the old fixed 45 px
+        // blur spread it past 90 px.
+        int spread = ShadowSpread(cx - 150, cy - 200, 400, 150);
+        Check("shadow follows the hand's silhouette", spread >= 0 && spread <= 45,
+            $"spread={spread}px rest={restShadow} pressed={pressedShadow}");
         Check("press shrinks the hand", pressed > 0 && pressed < rest * 0.95,
             $"rest={rest} pressed={pressed}");
         Check("tap sound on down", controller.TapSound.PlayCount == plays + 1,
@@ -337,6 +344,41 @@ internal static class M3Check
         for (int px = 0; px < width; px++)
             if (IsPointer(bitmap.GetPixel(px, 0))) count++;
         return count;
+    }
+
+    /// <summary>Largest distance the shadow extends past the hand's silhouette on any row
+    /// (a tight halo stays small; a soft blob spreads far).</summary>
+    private static int ShadowSpread(int x, int y, int width, int height)
+    {
+        using var bitmap = new Bitmap(width, height);
+        using (var g = Graphics.FromImage(bitmap)) g.CopyFromScreen(x, y, 0, 0, new Size(width, height));
+        int spread = -1;
+        for (int py = 0; py < height; py++)
+        {
+            int handLo = -1, handHi = -1, shadowLo = -1, shadowHi = -1;
+            for (int px = 0; px < width; px++)
+            {
+                var c = bitmap.GetPixel(px, py);
+                int max = Math.Max(c.R, Math.Max(c.G, c.B));
+                int min = Math.Min(c.R, Math.Min(c.G, c.B));
+                double luminance = 0.299 * c.R + 0.587 * c.G + 0.114 * c.B;
+                if (max - min > 15 || luminance < 135)
+                {
+                    if (handLo < 0) handLo = px;
+                    handHi = px;
+                }
+                else if (max - min <= 12 && luminance is > 140 and < 245)
+                {
+                    if (shadowLo < 0) shadowLo = px;
+                    shadowHi = px;
+                }
+            }
+            // Only the hand's own rows: the stem is stretched 8.5x vertically, so its shadow
+            // band fades over a longer distance at its ends (a straight band, not a blob).
+            if (handLo < 0 || shadowLo < 0 || handHi - handLo < 100) continue;
+            spread = Math.Max(spread, Math.Max(handLo - shadowLo, shadowHi - handHi));
+        }
+        return spread;
     }
 
     private static int CountNear(int x, int y, int width, int height, Color target, int tolerance)

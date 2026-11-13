@@ -127,7 +127,7 @@ public static class HandPoseSolver
         // rotation: the shadow keeps a fixed screen-space direction (down-right).
         float shadowDx = lift * 0.6f;
         float shadowDy = lift;
-        float shadowRadius = MathF.Max(1, lift * 0.35f) + 5 * press;
+        float shadowRadius = ShadowRadius(screenH, press);
         float shadowOpacity = showShadow ? 0.26f + 0.02f * press : 0;
 
         float cos = MathF.Cos(rotation);
@@ -149,6 +149,15 @@ public static class HandPoseSolver
             ShadowRadius: shadowRadius,
             ShadowOpacity: shadowOpacity,
             Tip: tip);
+    }
+
+    /// <summary><c>ArmView.aim</c> shadow radius: <c>max(1, lift × 0.35) + 5 × press</c>. The
+    /// shadow tightens as the hand presses down (45 px → 14 px on a 4K screen), which is what
+    /// keeps its silhouette hand-shaped instead of a soft blob.</summary>
+    public static float ShadowRadius(float screenH, float press)
+    {
+        float lift = LiftFrac * screenH * (1 - PressLiftShrink * press);
+        return MathF.Max(1, lift * 0.35f) + 5 * press;
     }
 
     /// <summary><c>ArmView.aimLaser</c>: <c>max(4, screenH × 0.0038 × size/0.13) × (1 + 0.2 × press)</c>.</summary>

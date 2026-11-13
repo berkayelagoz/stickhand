@@ -235,24 +235,37 @@ public class HandAssetTests
     [Fact]
     public void Shadow_IsABlurredPaddedSilhouette()
     {
-        var shadow = HandAssets.Shadow("lavender");
+        var shadow = HandAssets.Shadow("lavender", 2160);
         Assert.NotNull(shadow);
+        var soft = shadow!.Soft;
+        var tight = shadow.Tight;
         // 1/4 resolution of the 1024×1536 sprite plus the transparent blur margin.
-        Assert.True(shadow!.Padding > 0, $"padding={shadow.Padding}");
-        Assert.Equal(256 + 2 * shadow.Padding, shadow.Bitmap.Width);
-        Assert.Equal(384 + 2 * shadow.Padding, shadow.Bitmap.Height);
+        Assert.True(soft.Padding > 0, $"padding={soft.Padding}");
+        Assert.Equal(256 + 2 * soft.Padding, soft.Bitmap.Width);
+        Assert.Equal(384 + 2 * soft.Padding, soft.Bitmap.Height);
+        // The pressed level is tighter: smaller blur, smaller padding.
+        Assert.True(tight.Padding < soft.Padding, $"soft={soft.Padding} tight={tight.Padding}");
         // Black with alpha only: the blur spreads alpha past the sprite's opaque edge, into
         // the padding (the fingertip's shadow lives there).
-        var pixel = shadow.Bitmap.GetPixel(shadow.Padding + 128, shadow.Padding + 40);
+        var pixel = soft.Bitmap.GetPixel(soft.Padding + 128, soft.Padding + 40);
         Assert.Equal(0, pixel.R);
         Assert.Equal(0, pixel.G);
         Assert.Equal(0, pixel.B);
         // The fingertip's shadow lives in the padding above the silhouette's top row.
         var metrics = HandAssets.Metrics("lavender")!;
-        int silhouetteTop = shadow.Padding + (int)(metrics.HandTop * 384);
-        int tipX = shadow.Padding + (int)(metrics.TipX * 256);
-        var aboveTip = shadow.Bitmap.GetPixel(tipX, silhouetteTop - 10);
+        int silhouetteTop = soft.Padding + (int)(metrics.HandTop * 384);
+        int tipX = soft.Padding + (int)(metrics.TipX * 256);
+        var aboveTip = soft.Bitmap.GetPixel(tipX, silhouetteTop - 10);
         Assert.True(aboveTip.A > 0, $"alpha above the fingertip={aboveTip.A}");
+    }
+
+    [Fact]
+    public void ShadowRadius_TightensWithThePress()
+    {
+        // macOS: max(1, lift × 0.35) + 5 × press; 4K rest 45.4 px → full press 14.1 px.
+        Assert.Equal(0.06f * 2160 * 0.35f, HandPoseSolver.ShadowRadius(2160, 0), 1);
+        Assert.Equal(0.06f * 2160 * 0.2f * 0.35f + 5, HandPoseSolver.ShadowRadius(2160, 1), 1);
+        Assert.True(HandPoseSolver.ShadowRadius(2160, 1) < HandPoseSolver.ShadowRadius(2160, 0) / 2);
     }
 }
 
