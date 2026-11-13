@@ -100,7 +100,11 @@ public sealed class HandScene
 
         private readonly Dictionary<(string Style, int Scale), ID2D1Bitmap1> _handCache = new();
         private readonly List<(string Style, int Scale)> _handOrder = [];
-        private readonly Dictionary<(string Style, int Scale), ID2D1Bitmap1> _shadowCache = new();
+        /// <summary>Shadow bitmap plus the transparent padding around the silhouette (in
+        /// shadow-bitmap pixels) that the blur spreads into.</summary>
+        public sealed record ShadowTarget(ID2D1Bitmap1 Bitmap, int Padding);
+
+        private readonly Dictionary<(string Style, int Scale), ShadowTarget> _shadowCache = new();
         private readonly List<(string Style, int Scale)> _shadowOrder = [];
         private readonly Dictionary<string, ID2D1Bitmap1> _thumbnails = new();
         private const int HandCacheLimit = 2;
@@ -184,8 +188,9 @@ public sealed class HandScene
             }
         }
 
-        /// <summary>Pre-blurred silhouette for the hand's drop shadow (1/4 sprite resolution).</summary>
-        public ID2D1Bitmap1? ShadowBitmap(string styleId, int scale)
+        /// <summary>Pre-blurred silhouette for the hand's drop shadow (1/4 sprite resolution,
+        /// padded so the blur is not cut at the sprite edges).</summary>
+        public ShadowTarget? ShadowBitmap(string styleId, int scale)
         {
             var key = (styleId, scale);
             lock (_shadowCache)
@@ -193,17 +198,18 @@ public sealed class HandScene
                 if (_shadowCache.TryGetValue(key, out var cached)) return cached;
                 var shadow = HandAssets.Shadow(styleId);
                 if (shadow is null) return null;
-                var (bytes, pitch) = HandAssets.PremultipliedBytes(shadow);
-                var bitmap = CreateBitmap(bytes, pitch, shadow.Width, shadow.Height);
-                _shadowCache[key] = bitmap;
+                var (bytes, pitch) = HandAssets.PremultipliedBytes(shadow.Bitmap);
+                var bitmap = CreateBitmap(bytes, pitch, shadow.Bitmap.Width, shadow.Bitmap.Height);
+                var target = new ShadowTarget(bitmap, shadow.Padding);
+                _shadowCache[key] = target;
                 _shadowOrder.Add(key);
                 while (_shadowOrder.Count > HandCacheLimit)
                 {
                     var evicted = _shadowOrder[0];
                     _shadowOrder.RemoveAt(0);
-                    if (_shadowCache.Remove(evicted, out var stale)) stale.Dispose();
+                    if (_shadowCache.Remove(evicted, out var stale)) stale.Bitmap.Dispose();
                 }
-                return bitmap;
+                return target;
             }
         }
 
@@ -253,7 +259,7 @@ public sealed class HandScene
             }
             lock (_shadowCache)
             {
-                foreach (var bitmap in _shadowCache.Values) bitmap.Dispose();
+                foreach (var target in _shadowCache.Values) target.Bitmap.Dispose();
                 _shadowCache.Clear();
                 _shadowOrder.Clear();
             }
@@ -430,23 +436,43 @@ public sealed class HandScene
         var handDest = new Rect(0, 0, pose.Width, pose.HandLength);
         var rodDest = new Rect(0, pose.HandLength, pose.Width, pose.RodLength);
 
-        // Drop shadow first: the pre-blurred silhouette, offset down-right by the lift.
+        // Drop shadow first: the pre-blurred silhouette, offset down-right by the lift. The
+        // source and destination rects are expanded by the sprite's transparent padding so the
+        // blur spill is drawn too — cropping it at the hand part's edge left the fingertip
+        // without a shadow when the hand pressed down.
         if (pose.ShadowOpacity > 0 && res.ShadowBitmap(scene.StyleId, scale) is { } shadow)
         {
-            float sw = shadow.Size.Width;
-            float sh = shadow.Size.Height;
+            float pad = shadow.Padding;
+            float sw = shadow.Bitmap.Size.Width - 2 * pad;
+            float sh = shadow.Bitmap.Size.Height - 2 * pad;
             var shadowTransform = transform * Matrix3x2.CreateTranslation(pose.ShadowDx, pose.ShadowDy);
             ctx.Transform = shadowTransform;
-            ctx.DrawBitmap(shadow, handDest, pose.ShadowOpacity, BitmapInterpolationMode.Linear,
-                new Rect(0, metrics.HandTop * sh, sw, metrics.HandSpan * sh));
-            ctx.DrawBitmap(shadow, rodDest, pose.ShadowOpacity, BitmapInterpolationMode.Linear,
-                new Rect(0, metrics.Wrist * sh, sw, metrics.RodSpan * sh));
+            var (handShadowSource, handShadowDest) = ShadowPart(pad, sw, sh,
+                metrics.HandTop * sh, metrics.HandSpan * sh, 0, pose.HandLength, pose.Width);
+            var (rodShadowSource, rodShadowDest) = ShadowPart(pad, sw, sh,
+                metrics.Wrist * sh, metrics.RodSpan * sh, pose.HandLength, pose.RodLength, pose.Width);
+            ctx.DrawBitmap(shadow.Bitmap, handShadowDest, pose.ShadowOpacity,
+                BitmapInterpolationMode.Linear, handShadowSource);
+            ctx.DrawBitmap(shadow.Bitmap, rodShadowDest, pose.ShadowOpacity,
+                BitmapInterpolationMode.Linear, rodShadowSource);
         }
 
         ctx.Transform = transform;
         ctx.DrawBitmap(hand, handDest, 1f, BitmapInterpolationMode.Linear, handSource);
         ctx.DrawBitmap(hand, rodDest, 1f, BitmapInterpolationMode.Linear, rodSource);
         ctx.Transform = Matrix3x2.Identity;
+    }
+
+    /// <summary>Source/destination rects for one shadow part, expanded by the sprite padding so
+    /// the blurred spill outside the part is included.</summary>
+    private static (Rect Source, Rect Dest) ShadowPart(float pad, float sw, float sh,
+        float sourceY, float sourceHeight, float destY, float destHeight, float width)
+    {
+        float sx = width / sw;
+        float sy = destHeight / sourceHeight;
+        return (
+            new Rect(0, sourceY, sw + 2 * pad, sourceHeight + 2 * pad),
+            new Rect(-pad * sx, destY - pad * sy, width + 2 * pad * sx, destHeight + 2 * pad * sy));
     }
 
     /// <summary>macOS <c>ArmView.aimLaser</c>: a red dot with a soft glow and a light core.</summary>

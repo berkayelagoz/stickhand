@@ -136,10 +136,18 @@ internal static class M3Check
         int stemSpan = RowSpan(cx - 150, cy + 200, 600);
         Check("hand above the stem", handSpan > stemSpan * 2, $"handSpan={handSpan} stemSpan={stemSpan}");
         int rest = Ink(cx - 60, cy - 240, 320, 320);
+        int restShadow = Shadow(cx - 60, cy - 260, 120, 120);
         int plays = controller.TapSound.PlayCount;
         Mouse(Win32Input.MOUSEEVENTF_LEFTDOWN);
         Pump(300);
         int pressed = Ink(cx - 60, cy - 240, 320, 320);
+        int pressedShadow = Shadow(cx - 60, cy - 260, 120, 120);
+        // The drop shadow must wrap the fingertip: the blur spill above the hand part used to
+        // be cropped, so the tip looked unshadowed exactly when the hand pressed down.
+        Check("shadow hugs the fingertip when pressed", pressedShadow > 2000,
+            $"shadow={pressedShadow}");
+        Check("shadow tightens on press", pressedShadow > restShadow * 2,
+            $"rest={restShadow} pressed={pressedShadow}");
         Check("press shrinks the hand", pressed > 0 && pressed < rest * 0.95,
             $"rest={rest} pressed={pressed}");
         Check("tap sound on down", controller.TapSound.PlayCount == plays + 1,
@@ -287,6 +295,26 @@ internal static class M3Check
         int min = Math.Min(c.R, Math.Min(c.G, c.B));
         double luminance = 0.299 * c.R + 0.587 * c.G + 0.114 * c.B;
         return max - min > 15 || luminance < 135;
+    }
+
+    /// <summary>Neutral grey pixels: the hand's drop shadow over the white backdrop.</summary>
+    private static int Shadow(int x, int y, int width, int height)
+    {
+        using var bitmap = new Bitmap(width, height);
+        using (var g = Graphics.FromImage(bitmap)) g.CopyFromScreen(x, y, 0, 0, new Size(width, height));
+        int count = 0;
+        for (int py = 0; py < height; py++)
+        {
+            for (int px = 0; px < width; px++)
+            {
+                var c = bitmap.GetPixel(px, py);
+                int max = Math.Max(c.R, Math.Max(c.G, c.B));
+                int min = Math.Min(c.R, Math.Min(c.G, c.B));
+                double luminance = 0.299 * c.R + 0.587 * c.G + 0.114 * c.B;
+                if (max - min <= 12 && luminance is > 140 and < 245) count++;
+            }
+        }
+        return count;
     }
 
     private static int Ink(int x, int y, int width, int height)

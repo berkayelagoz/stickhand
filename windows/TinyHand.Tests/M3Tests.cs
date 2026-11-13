@@ -233,18 +233,26 @@ public class HandAssetTests
     }
 
     [Fact]
-    public void Shadow_IsABlurredSilhouette()
+    public void Shadow_IsABlurredPaddedSilhouette()
     {
         var shadow = HandAssets.Shadow("lavender");
         Assert.NotNull(shadow);
-        // 1/4 resolution of the 1024×1536 sprite.
-        Assert.Equal(256, shadow!.Width);
-        Assert.Equal(384, shadow.Height);
-        // Black with alpha only: the blur spreads alpha past the sprite's opaque edge.
-        var pixel = shadow.GetPixel(128, 40);
+        // 1/4 resolution of the 1024×1536 sprite plus the transparent blur margin.
+        Assert.True(shadow!.Padding > 0, $"padding={shadow.Padding}");
+        Assert.Equal(256 + 2 * shadow.Padding, shadow.Bitmap.Width);
+        Assert.Equal(384 + 2 * shadow.Padding, shadow.Bitmap.Height);
+        // Black with alpha only: the blur spreads alpha past the sprite's opaque edge, into
+        // the padding (the fingertip's shadow lives there).
+        var pixel = shadow.Bitmap.GetPixel(shadow.Padding + 128, shadow.Padding + 40);
         Assert.Equal(0, pixel.R);
         Assert.Equal(0, pixel.G);
         Assert.Equal(0, pixel.B);
+        // The fingertip's shadow lives in the padding above the silhouette's top row.
+        var metrics = HandAssets.Metrics("lavender")!;
+        int silhouetteTop = shadow.Padding + (int)(metrics.HandTop * 384);
+        int tipX = shadow.Padding + (int)(metrics.TipX * 256);
+        var aboveTip = shadow.Bitmap.GetPixel(tipX, silhouetteTop - 10);
+        Assert.True(aboveTip.A > 0, $"alpha above the fingertip={aboveTip.A}");
     }
 }
 

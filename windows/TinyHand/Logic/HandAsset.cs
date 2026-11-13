@@ -47,7 +47,7 @@ public static class HandAssets
     private static readonly object Gate = new();
     private static readonly Dictionary<string, HandMetrics> MetricsCache = new();
     private static readonly Dictionary<string, Bitmap> ThumbnailCache = new();
-    private static readonly Dictionary<string, Bitmap> ShadowCache = new();
+    private static readonly Dictionary<string, ShadowSprite> ShadowCache = new();
     private static readonly Dictionary<string, Bitmap> FullCache = new();
     private static readonly List<string> FullOrder = new();
 
@@ -144,8 +144,12 @@ public static class HandAssets
 
     /// <summary>Pre-blurred black silhouette of the sprite (1/4 resolution) used as the
     /// hand's drop shadow. The blur radius is derived from the same fractions the pose uses,
-    /// so it scales with the screen exactly like the macOS CALayer shadow.</summary>
-    public static Bitmap? Shadow(string styleId)
+    /// so it scales with the screen exactly like the macOS CALayer shadow. <see cref="Padding"/>
+    /// is the transparent margin around the silhouette that the blur spreads into: without it
+    /// the shadow is cut at the sprite edges (the fingertip lost its shadow when pressed).</summary>
+    public sealed record ShadowSprite(Bitmap Bitmap, int Padding);
+
+    public static ShadowSprite? Shadow(string styleId)
     {
         lock (Gate)
         {
@@ -162,7 +166,7 @@ public static class HandAssets
         {
             if (ShadowCache.TryGetValue(styleId, out var raced))
             {
-                shadow.Dispose();
+                shadow.Bitmap.Dispose();
                 return raced;
             }
             ShadowCache[styleId] = shadow;
@@ -338,7 +342,7 @@ public static class HandAssets
     /// pose's shadow radius (<c>lift × 0.35</c> with <c>lift = 0.06 × screenH</c>) expressed in
     /// sprite pixels, so the on-screen softness matches the macOS CALayer shadow at any
     /// resolution.</summary>
-    private static Bitmap BuildShadow(Bitmap sprite, HandMetrics metrics)
+    private static ShadowSprite BuildShadow(Bitmap sprite, HandMetrics metrics)
     {
         int sw = Math.Max(1, sprite.Width / ShadowDivisor);
         int sh = Math.Max(1, sprite.Height / ShadowDivisor);
@@ -349,38 +353,44 @@ public static class HandAssets
         float radiusAsset = HandPoseSolver.LiftFrac * 0.35f * spritePxPerScreenPx;
         int radius = Math.Max(1, (int)Math.Round(radiusAsset / ShadowDivisor));
 
-        var alpha = new byte[sw * sh];
-        using (var small = new Bitmap(sw, sh, PixelFormat.Format32bppArgb))
+        // Transparent margin so the blur can spread past the sprite edges (three box passes
+        // reach ~1.5 × radius; two radii of headroom is plenty).
+        int pad = radius * 2;
+        int w = sw + 2 * pad;
+        int h = sh + 2 * pad;
+
+        var alpha = new byte[w * h];
+        using (var small = new Bitmap(w, h, PixelFormat.Format32bppArgb))
         {
             using (var g = Graphics.FromImage(small))
             {
                 g.InterpolationMode = InterpolationMode.HighQualityBilinear;
                 g.PixelOffsetMode = PixelOffsetMode.Half;
                 g.Clear(Color.Transparent);
-                g.DrawImage(sprite, new Rectangle(0, 0, sw, sh));
+                g.DrawImage(sprite, new Rectangle(pad, pad, sw, sh));
             }
             var plane = AlphaPlane(small);
-            if (plane is null) return new Bitmap(1, 1, PixelFormat.Format32bppArgb);
+            if (plane is null) return new ShadowSprite(new Bitmap(1, 1, PixelFormat.Format32bppArgb), 0);
             alpha = plane;
         }
 
-        BoxBlur(alpha, sw, sh, radius);
-        BoxBlur(alpha, sw, sh, radius);
-        BoxBlur(alpha, sw, sh, radius);
+        BoxBlur(alpha, w, h, radius);
+        BoxBlur(alpha, w, h, radius);
+        BoxBlur(alpha, w, h, radius);
 
-        var shadow = new Bitmap(sw, sh, PixelFormat.Format32bppArgb);
-        var data = shadow.LockBits(new Rectangle(0, 0, sw, sh), ImageLockMode.WriteOnly,
+        var shadow = new Bitmap(w, h, PixelFormat.Format32bppArgb);
+        var data = shadow.LockBits(new Rectangle(0, 0, w, h), ImageLockMode.WriteOnly,
             PixelFormat.Format32bppArgb);
         try
         {
             var row = new byte[data.Stride];
-            for (int y = 0; y < sh; y++)
+            for (int y = 0; y < h; y++)
             {
                 Array.Clear(row);
-                for (int x = 0; x < sw; x++)
+                for (int x = 0; x < w; x++)
                 {
                     // Premultiplied black: B=G=R=0, A=blurred alpha.
-                    row[x * 4 + 3] = alpha[y * sw + x];
+                    row[x * 4 + 3] = alpha[y * w + x];
                 }
                 Marshal.Copy(row, 0, new IntPtr(data.Scan0.ToInt64() + (long)y * data.Stride), data.Stride);
             }
@@ -389,7 +399,7 @@ public static class HandAssets
         {
             shadow.UnlockBits(data);
         }
-        return shadow;
+        return new ShadowSprite(shadow, pad);
     }
 
     /// <summary>Separable box blur (three passes approximate a Gaussian).</summary>
