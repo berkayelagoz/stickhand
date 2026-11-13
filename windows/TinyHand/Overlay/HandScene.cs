@@ -24,14 +24,13 @@ namespace TinyHand.Overlay;
 /// not O(total ink)).</summary>
 public sealed record SceneSnapshot(
     Point Cursor,
-    bool ClickThrough,
     List<ToolbarButton> Toolbar,
     bool IsPrimary,
     int DpiX,
     string Status,
     string FpsHud)
 {
-    public static SceneSnapshot Empty { get; } = new(new Point(), false, [], false, 96, "", "");
+    public static SceneSnapshot Empty { get; } = new(new Point(), [], false, 96, "", "");
 }
 
 /// <summary>
@@ -62,7 +61,7 @@ public sealed class HandScene
     private static readonly Lazy<IDWriteFactory> Write = new(
         () => DWriteApi.DWriteCreateFactory<IDWriteFactory>(DWriteFactoryType.Shared));
 
-    private enum TextKind { Toolbar, Label, Status, Hud }
+    private enum TextKind { Toolbar, Status, Hud }
 
     private static readonly object FormatLock = new();
     private static readonly Dictionary<(TextKind, int), IDWriteTextFormat> Formats = new();
@@ -101,7 +100,6 @@ public sealed class HandScene
         public required ID2D1DeviceContext Context { get; init; }
         public required ID2D1StrokeStyle RoundStroke { get; init; }
         public required InkLayer Ink { get; init; }
-        public required ID2D1SolidColorBrush Label { get; init; }
         public required ID2D1SolidColorBrush ToolbarBg { get; init; }
         public required ID2D1SolidColorBrush ToolbarBorder { get; init; }
         public required ID2D1SolidColorBrush ToolbarText { get; init; }
@@ -194,7 +192,6 @@ public sealed class HandScene
                 foreach (var bitmap in _handCache.Values) bitmap.Dispose();
                 _handCache.Clear();
             }
-            Label.Dispose();
             ToolbarBg.Dispose();
             ToolbarBorder.Dispose();
             ToolbarText.Dispose();
@@ -228,7 +225,6 @@ public sealed class HandScene
             Context = context,
             RoundStroke = roundStroke,
             Ink = new InkLayer(renderer, monitor, scale),
-            Label = brush(244 / 255f, 51 / 255f, 90 / 255f, 1),
             ToolbarBg = brush(28 / 255f, 28 / 255f, 32 / 255f, 245 / 255f),
             ToolbarBorder = brush(1, 1, 1, 1),
             ToolbarText = brush(1, 1, 1, 1),
@@ -247,7 +243,6 @@ public sealed class HandScene
             var (family, weight, size, align, para) = kind switch
             {
                 TextKind.Toolbar => ("Segoe UI", FontWeight.Bold, 15f * scale, TextAlignment.Center, ParagraphAlignment.Center),
-                TextKind.Label => ("Segoe UI", FontWeight.Bold, 11f * scale, TextAlignment.Leading, ParagraphAlignment.Near),
                 TextKind.Status => ("Consolas", FontWeight.Normal, 12f, TextAlignment.Leading, ParagraphAlignment.Near),
                 _ => ("Consolas", FontWeight.Bold, 13f * scale, TextAlignment.Center, ParagraphAlignment.Center),
             };
@@ -305,16 +300,7 @@ public sealed class HandScene
         float y = scene.Cursor.Y + oy - 8 * scale; // fingertip sits at the cursor point
 
         ctx.DrawBitmap(hand, new Rect(x, y, w, h), 1f, BitmapInterpolationMode.Linear, new Rect(0, 0, w, h));
-
-        if (scene.ClickThrough)
-        {
-            var label = LabelRect(x + w + 6f * scale, y + 4f * scale, scale);
-            ctx.DrawText("click-through", TextFormat(TextKind.Label, scale), label, res.Label);
-        }
     }
-
-    private static Rect LabelRect(float x, float y, int scale) =>
-        new(x, y, 160 * scale, 40 * scale);
 
     private static void DrawToolbar(ID2D1DeviceContext ctx, SceneResources res, List<ToolbarButton> buttons, int scale)
     {

@@ -384,6 +384,9 @@ public static class User32
     [return: MarshalAs(UnmanagedType.Bool)]
     public static extern bool SetCursor(IntPtr hCursor);
 
+    [DllImport("user32.dll")]
+    public static extern IntPtr SendMessage(IntPtr hWnd, uint msg, IntPtr wParam, IntPtr lParam);
+
     [DllImport("user32.dll", SetLastError = true)]
     [return: MarshalAs(UnmanagedType.Bool)]
     public static extern bool SetSystemCursor(IntPtr hcur, uint id);

@@ -32,43 +32,53 @@ public sealed class GlobalCursorHider : IDisposable
     private readonly Dictionary<uint, IntPtr> _saved = new();
     private IntPtr _blank;
     private bool _hidden;
+    // HideAll now runs on the hook thread (ToggleClickThrough hides synchronously before
+    // flipping WS_EX_TRANSPARENT) while RestoreAll/Dispose stay on the overlay thread:
+    // guard the save-capture + hidden-flag sequence against that cross-thread pair.
+    private readonly object _gate = new();
 
     public bool IsHidden => _hidden;
 
     public void HideAll()
     {
-        if (_hidden) return;
-        if (_blank == IntPtr.Zero) _blank = CreateBlankCursor();
-        if (_blank == IntPtr.Zero)
-            throw new InvalidOperationException($"CreateIconIndirect failed: {Marshal.GetLastWin32Error()}");
-
-        foreach (uint id in CursorIds)
+        lock (_gate)
         {
-            // Save the scheme original only the first time we hide: later LoadImage
-            // calls would return our own blank cursor, not the scheme original.
-            if (!_saved.ContainsKey(id))
+            if (_hidden) return;
+            if (_blank == IntPtr.Zero) _blank = CreateBlankCursor();
+            if (_blank == IntPtr.Zero)
+                throw new InvalidOperationException($"CreateIconIndirect failed: {Marshal.GetLastWin32Error()}");
+
+            foreach (uint id in CursorIds)
             {
-                IntPtr current = User32.LoadImage(IntPtr.Zero, id, Win32.IMAGE_CURSOR, 0, 0, Win32.LR_SHARED);
-                if (current == IntPtr.Zero) continue;
-                _saved[id] = User32.CopyIcon(current);
+                // Save the scheme original only the first time we hide: later LoadImage
+                // calls would return our own blank cursor, not the scheme original.
+                if (!_saved.ContainsKey(id))
+                {
+                    IntPtr current = User32.LoadImage(IntPtr.Zero, id, Win32.IMAGE_CURSOR, 0, 0, Win32.LR_SHARED);
+                    if (current == IntPtr.Zero) continue;
+                    _saved[id] = User32.CopyIcon(current);
+                }
+                User32.SetSystemCursor(User32.CopyIcon(_blank), id);
             }
-            User32.SetSystemCursor(User32.CopyIcon(_blank), id);
+            _hidden = true;
         }
-        _hidden = true;
     }
 
     /// <summary>Restore the saved originals. Returns false if any SetSystemCursor call failed.</summary>
     public bool RestoreAll()
     {
-        if (!_hidden) return true;
-        bool ok = true;
-        foreach (var (id, saved) in _saved)
+        lock (_gate)
         {
-            if (saved != IntPtr.Zero && !User32.SetSystemCursor(User32.CopyIcon(saved), id))
-                ok = false;
+            if (!_hidden) return true;
+            bool ok = true;
+            foreach (var (id, saved) in _saved)
+            {
+                if (saved != IntPtr.Zero && !User32.SetSystemCursor(User32.CopyIcon(saved), id))
+                    ok = false;
+            }
+            _hidden = false;
+            return ok;
         }
-        _hidden = false;
-        return ok;
     }
 
     /// <summary>Fallback: reload the system cursors from the user's registry scheme.</summary>

@@ -15,19 +15,17 @@ namespace TinyHand;
 ///
 /// - Drawing mode: hook swallows button events; moves pass and hit the overlay
 ///   (WS_EX_NOREDIRECTIONBITMAP windows hit-test by their full rect) so
-///   WM_SETCURSOR blank-cur sors the real cursor.
+///   WM_SETCURSOR blank-cursors the real cursor.
 /// - Click-through mode (double Shift / toolbar): WS_EX_TRANSPARENT removes the
 ///   overlay from hit-testing (also over opaque hand pixels); hook passes
 ///   everything; the real cursor is hidden globally via SetSystemCursor with
-///   save/restore (contract: hand stays visible, real cursor stays hidden).
-/// - Down/up consistency: an up event is swallowed only if its down was swallowed.
-/// - Rendering (M1.5): Direct2D -> flip-model composition swap chain ->
-///   DirectComposition; the M1 GDI+/UpdateLayeredWindow path was retired because
-///   its present blocked 7-16 ms inside DWM redirection sync (PROGRESS.md).
-/// - Click-through mode (double Shift / toolbar): WS_EX_TRANSPARENT removes the
-///   overlay from hit-testing (also over opaque hand pixels); hook passes
-///   everything; the real cursor is hidden globally via SetSystemCursor with
-///   save/restore (contract: hand stays visible, real cursor stays hidden).
+///   save/restore (contract: hand stays visible, real cursor stays hidden). The
+///   hide runs synchronously on the hook thread BEFORE the style flip: as soon as
+///   the overlay stops hit-testing, the window below restores its cursor via
+///   WM_SETCURSOR, so a queued hide would show the real cursor for a frame. When a
+///   mouse button is held at toggle time, the style flip is deferred to the Up
+///   event: flipping hit-testing mid-drag lets the app below re-assert its cached
+///   (non-blank) cursor handle, which kept the real cursor visible while dragging.
 /// - Down/up consistency: an up event is swallowed only if its down was swallowed.
 /// </summary>
 public sealed class OverlayController : IDisposable
@@ -109,6 +107,8 @@ public sealed class OverlayController : IDisposable
     private readonly MouseDragTracker _dragTracker = new();
     private readonly DoublePressDetector _doubleShift = new(() => Environment.TickCount64);
     private bool _drawing;
+    private int _buttonsDown; // real (non-injected) button downs - ups, hook thread only
+    private bool _pendingClickThroughFlip; // WS_EX_TRANSPARENT swap deferred to the Up event
 
     // Ink feed: hook appends segments, each monitor's InkLayer applies only the new
     // ones into its persistent bitmap. Nothing copies point lists per frame anymore
@@ -287,6 +287,8 @@ public sealed class OverlayController : IDisposable
         _clickThrough = false;
         _dragTracker.Reset();
         _doubleShift.Reset();
+        _buttonsDown = 0;
+        _pendingClickThroughFlip = false;
         ClearStrokes();
         RebuildOverlays();
 
@@ -326,6 +328,8 @@ public sealed class OverlayController : IDisposable
 
         TryRestoreGlobalCursor();
         _clickThrough = false;
+        _buttonsDown = 0;
+        _pendingClickThroughFlip = false;
 
         if (_overlays is { } overlays)
             foreach (var part in overlays)
@@ -415,9 +419,7 @@ public sealed class OverlayController : IDisposable
         }
 
         _overlays = parts;
-        _toolbar = _primaryMonitor is { } primary
-            ? ToolbarModel.Build(primary.Bounds.Width, (int)primary.DpiX, _clickThrough)
-            : [];
+        RefreshToolbar();
 
         if (old is not null)
         {
@@ -430,6 +432,17 @@ public sealed class OverlayController : IDisposable
         }
 
         _dirty = true; // fresh frames: repaint once on the next tick
+    }
+
+    /// <summary>Rebuild the toolbar buttons from the current click-through state so the
+    /// toggle label follows the mode immediately (called from the hook thread on toggle;
+    /// RefreshToolbar writes the volatile field atomically and the compositor picks the
+    /// new list up on its next frame).</summary>
+    private void RefreshToolbar()
+    {
+        _toolbar = _primaryMonitor is { } primary
+            ? ToolbarModel.Build(primary.Bounds.Width, (int)primary.DpiX, _clickThrough)
+            : [];
     }
 
     private void TryHideGlobalCursor()
@@ -451,6 +464,13 @@ public sealed class OverlayController : IDisposable
         // registry scheme (SPI_SETCURSORS) restores the cursor pixel-perfect, and is
         // also the fallback when a SetSystemCursor call failed.
         GlobalCursorHider.RestoreSystemScheme();
+
+        // After coming back to drawing mode the restored arrow stays until the next
+        // WM_SETCURSOR (i.e. the next mouse move). Post one now so the blank cursor
+        // re-applies immediately instead of flashing the real arrow.
+        if (_active && _overlays is { } overlays)
+            foreach (var part in overlays)
+                User32.SendMessage(part.Window.Handle, Win32.WM_SETCURSOR, part.Window.Handle, (IntPtr)1 /* HTCLIENT */);
     }
 
     // =====================================================================
@@ -597,7 +617,6 @@ private void RenderFrame(bool busy)
     {
         return new SceneSnapshot(
             Cursor: new Point((int)Interlocked.Read(ref _cursorX), (int)Interlocked.Read(ref _cursorY)),
-            ClickThrough: _clickThrough,
             Toolbar: _toolbar ?? [],
             IsPrimary: _primaryMonitor?.IsPrimary ?? false,
             DpiX: (int)(_primaryMonitor?.DpiX ?? 96),
@@ -628,6 +647,7 @@ private void RenderFrame(bool busy)
 
             case MouseEventKind.Down:
             {
+                _buttonsDown++;
                 bool inToolbar = TryGetToolbarButton(e.X, e.Y, out ToolbarButton? button);
                 var decision = MousePolicy.Decide(new MousePolicyInput(
                     Kind: MouseEventKind.Down,
@@ -640,12 +660,19 @@ private void RenderFrame(bool busy)
 
             case MouseEventKind.Up:
             {
+                if (_buttonsDown > 0) _buttonsDown--;
                 bool swallow = _dragTracker.OnUp();
                 if (_drawing)
                 {
                     _drawing = false;
                     _lastInkPoint = null; // stroke finished: the next down starts a fresh anchor
                     _dirty = true;
+                }
+                if (_buttonsDown == 0 && _pendingClickThroughFlip)
+                {
+                    // All buttons released: apply the deferred WS_EX_TRANSPARENT swap.
+                    _pendingClickThroughFlip = false;
+                    ApplyClickThroughStyle();
                 }
                 return swallow;
             }
@@ -718,6 +745,39 @@ private void RenderFrame(bool busy)
         TraceLine($"toggle click-through -> {newMode}");
         _clickThrough = newMode;
 
+        if (_buttonsDown > 0)
+        {
+            // Mid-drag toggle: defer the WS_EX_TRANSPARENT flip (and the global cursor
+            // swap) to the Up event. Flipping hit-testing while the button is held makes
+            // the app below the cursor owner again; drag code re-asserts its cached
+            // cursor handle (never reloaded through the blanked system slot), so the
+            // real cursor stayed visible for the whole drag. Until Up, the overlay
+            // keeps hit-testing and its last-set blank cursor keeps the display clean.
+            _pendingClickThroughFlip = true;
+            RefreshToolbar();
+            _dirty = true;
+            return;
+        }
+
+        ApplyClickThroughStyle();
+        RefreshToolbar();
+        _dirty = true;
+    }
+
+    /// <summary>Apply the window styles and cursor mode that follow from _clickThrough.
+    /// Runs on the hook thread (immediate toggles and Up-deferred completions).</summary>
+    private void ApplyClickThroughStyle()
+    {
+        bool newMode = _clickThrough;
+
+        // Hide the real cursor synchronously on the hook thread BEFORE flipping
+        // WS_EX_TRANSPARENT: the moment the overlay stops hit-testing, the window
+        // below answers WM_SETCURSOR and restores its cursor. The hide used to ride
+        // the command queue (one overlay-loop period later, ~8-50 ms), which showed
+        // the real cursor for a frame on every double-Shift toggle.
+        if (newMode)
+            TryHideGlobalCursor();
+
         // Flip WS_EX_TRANSPARENT immediately from the hook thread (SetWindowLong on
         // extended styles does not send window messages); the compositor thread only
         // repaints the status/toolbar.
@@ -725,8 +785,8 @@ private void RenderFrame(bool busy)
             foreach (var part in overlays)
                 part.Window.ClickThrough = newMode;
 
+        // Restoring (SPI_SETCURSORS fallback) can be slow: keep it off the hook thread.
         _commands.Enqueue(new Command(newMode ? CommandKind.HideGlobalCursor : CommandKind.RestoreGlobalCursor));
-        _dirty = true;
     }
 
     private bool OnKeyboardFilter(HookKeyEvent e)
