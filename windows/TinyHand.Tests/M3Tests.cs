@@ -124,12 +124,16 @@ public class HandPoseTests
     }
 
     [Fact]
-    public void GripFollow_MatchesTheMacOSFactorAt120Hz()
+    public void GripFollow_Is25PercentFasterThanTheMacOSFactor()
     {
-        // One 120 Hz frame: the raw macOS factor.
-        Assert.Equal(100 + (200 - 100) * 0.08f, HandPoseSolver.FollowGrip(100, 200, 1f / 120f), 3);
-        // One 60 Hz frame: two 120 Hz steps, so the wall-clock response is the same.
-        Assert.Equal(100 + (200 - 100) * (1 - 0.92f * 0.92f), HandPoseSolver.FollowGrip(100, 200, 1f / 60f), 3);
+        // The macOS factor is per 120 Hz frame; the Windows tuning multiplies the rate by 1.25.
+        float at120 = 1 - MathF.Pow(1 - HandPoseSolver.GripFollow, HandPoseSolver.GripFollowSpeedup);
+        Assert.Equal(100 + (200 - 100) * at120, HandPoseSolver.FollowGrip(100, 200, 1f / 120f), 3);
+        // One 60 Hz frame: two and a half 120 Hz steps, so the wall-clock response is the same.
+        Assert.Equal(100 + (200 - 100) * (1 - MathF.Pow(1 - HandPoseSolver.GripFollow, 2.5f)),
+            HandPoseSolver.FollowGrip(100, 200, 1f / 60f), 3);
+        // 25 % faster than the raw macOS factor at the same cadence.
+        Assert.True(at120 > 0.08f * 1.2f, $"at120={at120}");
         Assert.Equal(1f - 0.18f, HandPoseSolver.ReleasePress(1f), 3);
         Assert.Equal(0f, HandPoseSolver.ReleasePress(0f), 3);
     }

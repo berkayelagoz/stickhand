@@ -58,6 +58,10 @@ public static class HandPoseSolver
     /// <summary>The macOS busy cadence the per-frame factor was tuned at (120 Hz).</summary>
     public const float GripFollowReferenceHz = 120f;
 
+    /// <summary>Windows tuning on top of the macOS reference: the grip follows 25 % faster
+    /// (user request, 14 Kasım 2026) — the time constant drops from 0,1 s to 0,08 s.</summary>
+    public const float GripFollowSpeedup = 1.25f;
+
     /// <summary><c>ArmView.liftFrac</c>: the hand floats 6 % of the screen height above the surface.</summary>
     public const float LiftFrac = 0.06f;
 
@@ -83,10 +87,12 @@ public static class HandPoseSolver
     /// Advance the smoothed grip x one frame toward its target. The macOS factor is per frame
     /// at 120 Hz; scaling by dt keeps the wall-clock response identical at the 60 Hz busy
     /// cadence and at the 20 Hz idle tick (a fixed per-frame factor made the stem's far end
-    /// trail the hand twice as long on a 60 Hz display).
+    /// trail the hand twice as long on a 60 Hz display). <see cref="GripFollowSpeedup"/> then
+    /// makes the follow 25 % faster than the macOS reference.
     /// </summary>
     public static float FollowGrip(float gripX, float targetX, float dtSeconds) =>
-        gripX + (targetX - gripX) * (1 - MathF.Pow(1 - GripFollow, dtSeconds * GripFollowReferenceHz));
+        gripX + (targetX - gripX)
+        * (1 - MathF.Pow(1 - GripFollow, dtSeconds * GripFollowReferenceHz * GripFollowSpeedup));
 
     /// <summary>Advance the press amount one frame while the button is released.</summary>
     public static float ReleasePress(float press) => press + (0 - press) * PressReleaseFollow;
