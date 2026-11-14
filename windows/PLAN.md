@@ -376,13 +376,17 @@ M6'da kaldırılan üç parça geri gelir; `Updater`, `--updatecheck`, `UpdatePr
 
 **Sonuç (14 Kasım 2026):** iki release de açıldı — `v1.1.0` (6 varlık) ve `v1.1.1` (delta dahil 8 varlık). Gerçek feed doğrulandı: kurulu 1.1.0 `--updatecheck` → `update 1.1.1 (114 MB, deltas=1, 1759 ms)` → `--apply` → %100 → `current\StickHand.dll` **1.1.1.0** → tekrar `--updatecheck` "no update" → `--uninstall` temiz. **Bulgu:** ilk release denemesi `release-windows.ps1`'de düştü — hiç release yokken `gh release list` `[]` döndürüyor, `@($null)` tek elemanlı dizi oluyor ve StrictMode `$_.tagName`'de patlıyordu; liste savunmalı kurulacak şekilde düzeltildi (fdd4fa7) ve tag yeni commit'e taşındı.
 
-#### M7.4 — README + görsel
+#### M7.4 — README + görsel — ERTELENDİ (14 Kasım 2026)
+
+> **Ertelendi:** sahibi şimdilik istemedi. Görsel, uygulamanın ekranın üzerine çizmesi yüzünden masaüstünü de kareye alıyor; nötr bir zeminle (boş bir pencere üzerinde) çekilmesi gerekiyor.
 
 - [ ] Uygulamanın kendi ekran görüntüsü/GIF'i (el + mürekkep + toolbar); `docs/assets/` altına, README'nin üstüne. Public repo'da dönüşümü en çok etkileyen tek şey.
 - [ ] Kurulum bölümü ve kısayol tablosu gözden geçirilir; "private" referansı kalmaz.
 - **Çıkış:** README public repo için tam; SmartScreen notu ve `stickhand://` otomasyonu doğru.
 
-#### M7.5 — docs/ alan adı kararı
+#### M7.5 — docs/ alan adı kararı — ERTELENDİ (14 Kasım 2026)
+
+> **Ertelendi:** sahibi şimdilik istemedi. `docs/` yayınlanmadığı sürece `tinyhand.app` URL'leri zararsız ama anlamsız; yayınlanacaksa 7 URL tek dosyada güncellenir.
 
 - [ ] `docs/index.html` canonical/og URL'leri hâlâ `tinyhand.app`. Site yayınlanacaksa alan adı belirlenir; yayınlanmayacaksa `docs/` çıkarılır.
 - **Çıkış:** karar + uygulama.
