@@ -211,6 +211,65 @@ Karar gereği M2'den önce uygulanır; gerekçe spike bölümündeki sonuç notu
   - **Ekran değişimi:** `WM_DISPLAYCHANGE` (ve `WM_DPICHANGED`) yolu gerçek mesajla sınanır — overlay seti yeniden kurulur, sınırlar korunur, el çizilmeye devam eder. Fiziksel %125 geçişi gerçek donanımda doğrulandı; yalnız ekran kilidi (Win+L) turu kaldı (oturum kilidi otomasyona kapalı).
 - **Çıkış kriteri (karşılandı, 14 Kasım 2026):** kurulum, güncelleme ve test geçişleri tamam; sürüm iki platformun paketleriyle aynı tag'den tek Release'te çıkar. Kanıt: `--m5check` **32/32** (gerçek 100 % + 125 % çift-DPI kurulumu; monitör envanteri, monitör başına overlay + DPI, el imlecin ekranında + karşı ekranda ikinci kol yok, ikinci ekranda mürekkep + temizleme, `WM_DISPLAYCHANGE` sonrası yeniden kurulum, ikinci ekranda gerçek imleç gizli/açık, DPI tablosu, güncelleme yüzeyi + indirme ilerleme penceresi); birim testleri **148/148**; gerçek kurulum turu: `TinyHand-WindowsSetup.exe --silent` → `%LOCALAPPDATA%\TinyHand` (kısayollar + kaldırma kaydı), kurulu 1.1.0 `--updatecheck` → 1.1.1 (delta=1), `--apply` → indirme + uygulama + yeniden başlatma, `current\TinyHand.dll` **1.1.1.0**, güncellenmiş kurulumda `--m5check` 30/30 (kurulu varyant), `Update.exe --uninstall` sonrası dizin/kısayol/registry temiz; regresyonlar: `--m3check` PASS, `--inkcheck` 20/20, `--m4check` 71/71, `--fpscheck --ink` 60,0 fps (draw p95 0,8 / present p95 0,4 ms), e2e-m1 10/10, cursorcheck 7/7.
 
+### M6 — Windows-only depo (macOS uygulamasını çıkarma) — PLANLANDI
+
+Amaç: `only_windows` branch'inde depoyu **yalnızca Windows uygulaması** olarak bırakmak. macOS uygulaması (`Sources/`, Swift/AppKit) ve ona bağlı CI/paketleme adımları kalkar; Windows portu tek ürün olur. Bu bir "özellik" değil, depo şekli değişikliğidir — M1–M5 tamamlandıktan sonra yapılır.
+
+**Hukuk (karar verildi, 14 Kasım 2026):** MIT "modify" hakkını verdiği için macOS kodunu silmek serbesttir. Telif satırı **kalır**, çünkü depoda Kamran Ahmed'in assetleri (36 el PNG'si + 15 tap sesi) dağıtılmaya devam ediyor. `LICENSE` zaten iki satırı taşıyor (`Kamran Ahmed` + `Berkay Elagöz (Windows port)`); bu dosya silinmez, değiştirilmez. Assetler de kendi üretilenlerle değiştirilirse satır zorunlu olmaktan çıkar (tavsiye: yine de tutulur). "TinyHand" adı ve logosu MIT kapsamında değildir; yayın adı ayrı bir karardır.
+
+#### Silinecekler
+
+| Yol | Ne |
+|---|---|
+| `Sources/` | macOS uygulamasının tamamı (Swift/AppKit) |
+| `Package.swift`, `Package.resolved` | SwiftPM manifesti ve kilit dosyası |
+| `scripts/lib.sh`, `scripts/release.sh` | macOS bundle/sign/notarize/appcast betikleri |
+| `scripts/build-app.sh` | macOS bundle üretimi |
+| `scripts/make-icons.py`, `scripts/make-sounds.py` | macOS asset üretim araçları (assetler depoda hazır; isteğe bağlı, silinebilir) |
+| `assets/AppIcon.icns`, `assets/AppIcon.icon`, `assets/Assets.car` | macOS ikon varlıkları (Windows ikonu `windows/TinyHand/assets/appicon.ico`) |
+
+#### Kalacaklar (silinirse build kırılır)
+
+| Yol | Neden |
+|---|---|
+| `assets/hand_*.png` (36) | `TinyHand.csproj` gömüyor: `..\..\assets\hand_*.png` |
+| `assets/sounds/tap_*.wav` (15) | `TinyHand.csproj` gömüyor: `..\..\assets\sounds\tap_*.wav` |
+| `VERSION` | `TinyHand.csproj` sürümü buradan okuyor (`..\..\VERSION`) |
+| `LICENSE` | Telif + MIT metni; kurulum sihirbazı ve portable zip bunu taşıyor |
+| `windows/` | Ürünün kendisi |
+| `.github/` | CI (aşağıda düzenlenecek) |
+
+> Assetleri `windows/assets/` altına taşımak da mümkündür; o zaman `TinyHand.csproj` içindeki iki `EmbeddedResource` yolunu ve `release-windows.ps1`'in `$repoRoot` varsayımlarını güncellemek gerekir. **Öneri: kökte bırakmak** (daha az değişiklik, daha az kırılma).
+
+#### Düzenlenecekler
+
+1. **`.github/workflows/build.yml`** — `build` (macos-latest, `swift build`) işi silinir; `build-windows` kalır (istenirse `build` olarak yeniden adlandırılır). `on:` tetikleri (`push: main`, `pull_request`, `workflow_dispatch`) aynı kalır.
+2. **`.github/workflows/release.yml`** — `release` (macos-latest) işi silinir. Sonuçları:
+   - `release-windows`'tan `needs: release` **kaldırılır** (yoksa iş hiç çalışmaz).
+   - `if: always() && (needs.release.result == 'success' || github.event_name == 'workflow_dispatch')` **kaldırılır**.
+   - Yayın adımı `gh release upload --clobber` yerine **`gh release create`** olur (release'i artık Windows işi açıyor): `--title "$VERSION" --notes "$RELEASE_NOTES"` + varlık listesi. Tag zaten `v*` ile tetikleniyor; `workflow_dispatch`'te yayın adımı yine atlanır (`if: startsWith(github.ref, 'refs/tags/v')`).
+   - macOS'a özgü adımlar (create-dmg, sertifika, notarize, keychain temizliği) silinir.
+3. **`README.md`** — Windows'a yazılır: indirme (`TinyHand-WindowsSetup.exe`), SmartScreen notu, kısayol tablosu, `tinyhand://` otomasyonu, bilinen sınırlar (yükseltilmiş pencereler, imleç kurtarma). macOS bölümleri ve DMG/App Store rozetleri kalkar; platform rozeti yalnız Windows.
+4. **`Updater.RepositoryUrl`** (`windows/TinyHand/Updater.cs`) — **karar gerekiyor:** yayın hangi depodan yapılacaksa o yazılır. Windows-only depo `berkayelagoz/tinyhand` olacaksa `https://github.com/berkayelagoz/tinyhand`; upstream (`nilbuild/tinyhand`) korunacaksa değişmez. Aynı değer `SettingsWindow` About linklerinde ve README indirme linklerinde de güncellenir.
+5. **`windows/PLAN.md` / `windows/PROGRESS.md`** — başa tek satır not: "macOS uygulaması M6'da çıkarıldı; aşağıdaki macOS referansları tarihsel kayıttır, davranış sözleşmeleri (state.json, URL grameri, stil kümesi, ses seti, mürekkep rengi) hâlâ geçerlidir." M1–M5 kayıtları silinmez (geçmiş).
+6. **`docs/`** (tinyhand.app sitesi) — ayrı karar: kalabilir (indirme linkleri Windows'a çevrilir) veya çıkarılır. Windows portuyla ilgisi yok, build'i etkilemez.
+
+#### Doğrulama (çıkış kriteri)
+
+- [ ] Temiz klonda `dotnet build windows/TinyHand.sln -c Release` ve `dotnet test` geçer (**148/148**).
+- [ ] `--m5check` **32/32**, `--m3check` PASS, `--inkcheck` 20/20, `--m4check` 71/71, e2e-m1 10/10, cursorcheck 7/7.
+- [ ] `powershell -File windows/scripts/release-windows.ps1` tam varlık setini üretir: `TinyHand-WindowsSetup.exe`, `TinyHand-Windows-portable.zip`, `releases.win.json`, `TinyHand-<sürüm>-full.nupkg` (+ `-delta.nupkg`), SHA256; portable zip içinde `current/LICENSE.txt` var.
+- [ ] `grep -ri "swift\|Package.swift\|Sources/TinyHand" --exclude-dir=.git .` yalnızca tarihsel PLAN/PROGRESS notlarını döndürür (kod/CI/README'de referans kalmaz).
+- [ ] CI: PR'da `build-windows` yeşil; `v*` tag push'unda tek iş release'i açar ve Windows varlıklarını yükler.
+- [ ] Kurulum turu: `--silent` kurulum → `--updatecheck` → `--apply` → sürüm artışı; `--uninstall` temiz.
+
+#### Notlar / riskler
+
+- macOS uygulaması git geçmişinde kalır (`git log -- Sources/`); geri dönmek gerekirse branch/commit'ten alınır.
+- Fork upstream'den ayrışır; upstream'den gelen değişiklikleri almak artık elle merge demektir (beklenen sonuç).
+- `windows/PLAN.md`'deki "ortak davranış sözleşmeleri" bölümü macOS referansına dayanıyor; macOS kodu gittikten sonra bu sözleşmeler **spesifikasyon** olarak kalır (state.json, URL grameri, 36 stil + lazer, 15 ses, mürekkep rengi, fade). Silinmez.
+- Asset lisansı: PNG/WAV'lar MIT kapsamında kalır; `LICENSE` iki satırıyla korunur. Yeni asset üretilirse bu not güncellenir.
+
 ## Açık kararlar (kullanıcı)
 
 1. Karar: Sertifika satın alınmayacak (ücretsiz dağıtım). Sonuç: SmartScreen "bilinmeyen uygulama" uyarısı kullanıcı tarafından elle geçilir; AV false positive riski kabul edilir. Self-signed imza yapılmayacak (faydası yok). Bu karar gereği `uiAccess="true"` plandan çıkarıldı (imzalı ikili gerektirir); yükseltilmiş pencerelerin üstünde çizim yapılamaması kalıcı, belgelenmiş sınırlamadır.
@@ -218,3 +277,4 @@ Karar gereği M2'den önce uygulanır; gerekçe spike bölümündeki sonuç notu
 3. Çözüldü (macOS referansı izlenir): çift Shift click-through modunda TinyHand eli görünür kalır, gerçek imleç gizli. M1 prototipinde Windows tarafında doğrulanır.
 4. Karar: Hedef işletim sistemi yalnızca **Windows 11 x64**; Windows 10 desteklenmez ve test edilmez. Sonuç: .NET 10 destek listesindeki Windows 10 edisyon ayrıntıları takip edilmez; gereksinim ve dağıtım metinleri tek hedefle yazılır.
 5. Interact tuşu (M3): varsayılan **Alt** (macOS ⌥ karşılığı). Windows'ta tek başına Alt tap'i alttaki uygulamanın menü çubuğunu vurgular; modifier'ı yutmak sistem tuş durumunu kilitlediği için bu davranış kabul edilir ve M4 ayarlarından tuş değiştirilebilir (Ctrl / Shift / kapalı) *(M4'te uygulandı: Ayarlar → General → Hold to use the app)*.
+6. M6 (Windows-only depo): yayın hangi depodan yapılacak — `berkayelagoz/tinyhand` (fork) mi, `nilbuild/tinyhand` (upstream) mi? Seçime göre `Updater.RepositoryUrl`, README indirme linkleri ve `docs/` güncellenir; upstream seçilirse o repoda yazma yetkisi gerekir.
