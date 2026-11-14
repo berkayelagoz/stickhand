@@ -7,21 +7,24 @@ namespace StickHand;
 /// <summary>
 /// Velopack self-update: the Windows counterpart of the macOS Sparkle updater.
 ///
-/// Releases go to the same GitHub Release as the macOS DMG. The Windows channel is
-/// <c>win</c>, so the feed is <c>releases.win.json</c> plus the full and delta
-/// <c>.nupkg</c> packages published next to it (see <c>installer/velopack.json</c> and
-/// <c>scripts/release-windows.ps1</c>).
+/// The Windows channel is <c>win</c>, so the feed is <c>releases.win.json</c> plus the
+/// full and delta <c>.nupkg</c> packages published next to it (see
+/// <c>installer/velopack.json</c> and <c>scripts/release-windows.ps1</c>).
+///
+/// The repository is private, so Velopack's token-less <c>GithubSource</c> cannot read
+/// its releases and the app offers no update check. The class stays for the
+/// install/uninstall hooks and for the <c>--updatecheck</c> diagnostic; a public
+/// repository makes it work again unchanged.
 ///
 /// A development build (run from <c>bin/</c>) is not installed, so Velopack cannot
-/// update it: <see cref="IsInstalled"/> is false and the tray reports "not installed"
-/// instead of failing.
+/// update it: <see cref="IsInstalled"/> is false.
 /// </summary>
 public static class Updater
 {
     /// <summary>Velopack channel; the feed asset is <c>releases.win.json</c>.</summary>
     public const string Channel = "win";
 
-    /// <summary>Same repository the macOS app updates from.</summary>
+    /// <summary>Repository the release feed is read from.</summary>
     public const string RepositoryUrl = "https://github.com/berkayelagoz/stickhand";
 
     /// <summary>Assembly version (from the repository VERSION file), e.g. <c>1.1.0</c>.</summary>

@@ -13,9 +13,9 @@
                                                  release is present in the output dir)
       *.sha256                         checksums for the two user-facing files
 
-    The version comes from the repository VERSION file (the same number the macOS DMG
-    ships with) unless -Version is given. The channel and package names come from
-    installer/velopack.json so CI and local runs cannot drift apart.
+    The version comes from the repository VERSION file unless -Version is given. The
+    channel and package names come from installer/velopack.json so CI and local runs
+    cannot drift apart.
 
     Deltas: Velopack builds a delta against the previous package only when that package
     is in the output directory. Pass -FetchPrevious to download the latest release's
@@ -79,9 +79,9 @@ Copy-Item $licensePath (Join-Path $publishDir "LICENSE.txt") -Force
 New-Item -ItemType Directory -Force -Path $outputPath | Out-Null
 
 if ($FetchPrevious) {
-    # Delta packages need the previous release's nupkg in the output directory. The macOS
-    # job creates the release for this tag before this job runs, so skip the current tag
-    # and take the newest release that is not it.
+    # Delta packages need the previous release's nupkg in the output directory. The
+    # release for this tag does not exist yet (this job creates it), so take the newest
+    # release that is not the current tag.
     Write-Host "==> Fetching the previous release packages for deltas"
     if (-not (Get-Command gh -ErrorAction SilentlyContinue)) {
         Write-Host "    gh CLI not found; skipping (no delta packages)"

@@ -58,15 +58,30 @@ public class DistributionTests
     }
 
     [Fact]
-    public void ReleaseWorkflow_AddsTheWindowsAssetsToTheSameRelease()
+    public void ReleaseWorkflow_OpensTheReleaseWithTheWindowsAssets()
     {
         string path = Path.Combine(RepoRoot(), ".github", "workflows", "release.yml");
         string workflow = File.ReadAllText(path);
         Assert.Contains("release-windows", workflow);
-        Assert.Contains("needs: release", workflow);
-        Assert.Contains("gh release upload", workflow);
+        // M6: the Windows job is the only release job, so it opens the release itself.
+        Assert.DoesNotContain("needs: release", workflow);
+        Assert.Contains("gh release create", workflow);
         Assert.Contains("releases.win.json", workflow);
         Assert.Contains("StickHand-WindowsSetup.exe", workflow);
+    }
+
+    [Fact]
+    public void Workflows_AreWindowsOnly()
+    {
+        // M6: the macOS app is gone, so no job may run on a macOS runner.
+        foreach (string name in new[] { "build.yml", "release.yml" })
+        {
+            string path = Path.Combine(RepoRoot(), ".github", "workflows", name);
+            string workflow = File.ReadAllText(path);
+            Assert.DoesNotContain("macos-latest", workflow);
+            Assert.DoesNotContain("swift", workflow);
+            Assert.Contains("windows-latest", workflow);
+        }
     }
 }
 

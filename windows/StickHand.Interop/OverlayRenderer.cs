@@ -31,8 +31,9 @@ public sealed class OverlayRenderer : IDisposable
     {
         D3D11.D3D11CreateDevice(null, DriverType.Hardware, DeviceCreationFlags.BgraSupport,
             [D3DFeatureLevel.Level_11_1, D3DFeatureLevel.Level_11_0, D3DFeatureLevel.Level_10_1],
-            out ID3D11Device device).CheckError();
-        Device = device.QueryInterface<ID3D11Device1>();
+            out ID3D11Device? device).CheckError();
+        // CheckError throws when the call fails, so the device is set from here on.
+        Device = device!.QueryInterface<ID3D11Device1>();
         DeviceContext = device.ImmediateContext;
 
         var dxgiDevice = device.QueryInterface<IDXGIDevice>();

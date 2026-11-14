@@ -12,10 +12,10 @@
     <ApplicationHighDpiMode>PerMonitorV2</ApplicationHighDpiMode>
     <AssemblyName>StickHand</AssemblyName>
     <RootNamespace>StickHand</RootNamespace>
-    <!-- One version for both apps: the repository VERSION file is the release tag, so the
-         Windows package and the macOS DMG always ship the same number. FileVersion and
-         ProductVersion are derived from Version by the SDK, so a release build that passes
-         -p:Version=<tag> keeps every version field in step. -->
+    <!-- The repository VERSION file is the release tag, so the package version and the
+         tag always agree. FileVersion and ProductVersion are derived from Version by the
+         SDK, so a release build that passes -p:Version=<tag> keeps every version field in
+         step. -->
     <StickHandVersion>$([System.IO.File]::ReadAllText('$(MSBuildThisFileDirectory)..\..\VERSION').Trim())</StickHandVersion>
     <Version>$(StickHandVersion)</Version>
     <Product>StickHand</Product>
@@ -32,8 +32,8 @@
     <PackageReference Include="Velopack" Version="1.2.161" />
   </ItemGroup>
 
-  <!-- Shared assets live at the repository root (the macOS app bundles the same files):
-       the 36 built-in hand sprites (hand + stem compose) and the 15 tap sounds. -->
+  <!-- Assets live at the repository root: the 36 built-in hand sprites (hand + stem
+       compose) and the 15 tap sounds. -->
   <ItemGroup>
     <EmbeddedResource Include="..\..\assets\hand_*.png" LogicalName="StickHand.assets.%(Filename)%(Extension)" />
     <EmbeddedResource Include="..\..\assets\sounds\tap_*.wav" LogicalName="StickHand.assets.sounds.%(Filename)%(Extension)" />

@@ -560,5 +560,5 @@
     return { setStyle, setInk: c => { opts.ink = c; }, activate, deactivate, preload, get active() { return enabled; }, get style() { return style; }, hands: HANDS };
   }
 
-  window.TinyHandDemo = { mount, hands: HANDS };
+  window.StickHandDemo = { mount, hands: HANDS };
 })();

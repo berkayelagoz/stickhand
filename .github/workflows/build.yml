@@ -3,19 +3,11 @@ name: Build
 on:
   push:
     branches: [main]
-  pull_request
+  pull_request:
   # Manual run from the Actions tab: lets a branch be checked without opening a PR.
   workflow_dispatch:
 
 jobs:
-  build:
-    runs-on: macos-latest
-    timeout-minutes: 20
-    steps:
-      - uses: actions/checkout@v4
-      - name: Build (universal)
-        run: swift build -c release --arch arm64 --arch x86_64
-
   build-windows:
     runs-on: windows-latest
     timeout-minutes: 20

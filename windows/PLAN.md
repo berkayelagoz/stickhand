@@ -1,5 +1,7 @@
 # StickHand — Windows Planı
 
+> **M6 (14 Kasım 2026):** macOS uygulaması depodan çıkarıldı; aşağıdaki macOS referansları tarihsel kayıttır. Davranış sözleşmeleri (state.json şeması, URL grameri, 36 stil + lazer, 15 ses, mürekkep rengi, fade) hâlâ geçerlidir.
+
 > **Ad değişikliği (14 Kasım 2026):** ürünün adı **StickHand** oldu; depo `berkayelagoz/stickhand`. Aşağıdaki M1–M5 kayıtları "TinyHand" adıyla yazıldığı için tarihseldir — davranış sözleşmeleri (state.json şeması, URL grameri, 36 stil + lazer, 15 ses, mürekkep rengi, fade) hâlâ geçerlidir. Yeniden adlandırma tablosu: M6 → "İsim kararı".
 
 Kaynak: macOS uygulaması (`Sources/TinyHand/`, Swift/AppKit). Hedef: özellik eşliği, tek depoda iki ayrı uygulama. Kod tabanı paylaşılmaz; eşliği garanti eden ortak davranış sözleşmeleri ve varlıklar (aşağıda ayrı bölüm).
@@ -213,7 +215,7 @@ Karar gereği M2'den önce uygulanır; gerekçe spike bölümündeki sonuç notu
   - **Ekran değişimi:** `WM_DISPLAYCHANGE` (ve `WM_DPICHANGED`) yolu gerçek mesajla sınanır — overlay seti yeniden kurulur, sınırlar korunur, el çizilmeye devam eder. Fiziksel %125 geçişi gerçek donanımda doğrulandı; yalnız ekran kilidi (Win+L) turu kaldı (oturum kilidi otomasyona kapalı).
 - **Çıkış kriteri (karşılandı, 14 Kasım 2026):** kurulum, güncelleme ve test geçişleri tamam; sürüm iki platformun paketleriyle aynı tag'den tek Release'te çıkar. Kanıt: `--m5check` **32/32** (gerçek 100 % + 125 % çift-DPI kurulumu; monitör envanteri, monitör başına overlay + DPI, el imlecin ekranında + karşı ekranda ikinci kol yok, ikinci ekranda mürekkep + temizleme, `WM_DISPLAYCHANGE` sonrası yeniden kurulum, ikinci ekranda gerçek imleç gizli/açık, DPI tablosu, güncelleme yüzeyi + indirme ilerleme penceresi); birim testleri **148/148**; gerçek kurulum turu: `TinyHand-WindowsSetup.exe --silent` → `%LOCALAPPDATA%\TinyHand` (kısayollar + kaldırma kaydı), kurulu 1.1.0 `--updatecheck` → 1.1.1 (delta=1), `--apply` → indirme + uygulama + yeniden başlatma, `current\TinyHand.dll` **1.1.1.0**, güncellenmiş kurulumda `--m5check` 30/30 (kurulu varyant), `Update.exe --uninstall` sonrası dizin/kısayol/registry temiz; regresyonlar: `--m3check` PASS, `--inkcheck` 20/20, `--m4check` 71/71, `--fpscheck --ink` 60,0 fps (draw p95 0,8 / present p95 0,4 ms), e2e-m1 10/10, cursorcheck 7/7.
 
-### M6 — Windows-only depo (macOS uygulamasını çıkarma) — PLANLANDI
+### M6 — Windows-only depo (macOS uygulamasını çıkarma) — TAMAM (14 Kasım 2026)
 
 Amaç: `only_windows` branch'inde depoyu **yalnızca Windows uygulaması** olarak bırakmak. macOS uygulaması (`Sources/`, Swift/AppKit) ve ona bağlı CI/paketleme adımları kalkar; Windows portu tek ürün olur. Bu bir "özellik" değil, depo şekli değişikliğidir — M1–M5 tamamlandıktan sonra yapılır.
 
@@ -266,6 +268,8 @@ Sözleşme adları neden sabit:
 
 #### Silinecekler
 
+**Durum (14 Kasım 2026): silindi.**
+
 | Yol | Ne |
 |---|---|
 | `Sources/` | macOS uygulamasının tamamı (Swift/AppKit) |
@@ -290,6 +294,8 @@ Sözleşme adları neden sabit:
 
 #### Düzenlenecekler
 
+**Durum (14 Kasım 2026): uygulandı.** Sapmalar: `build-windows` adı korundu (branch protection'daki check adı değişmesin); `docs/` kaldı (kullanıcı kararı); `build.yml`'deki çıplak `pull_request` anahtarı `pull_request:` olarak düzeltildi (GitHub tolere ediyordu, YAML geçerli değildi).
+
 1. **`.github/workflows/build.yml`** — `build` (macos-latest, `swift build`) işi silinir; `build-windows` kalır (istenirse `build` olarak yeniden adlandırılır). `on:` tetikleri (`push: main`, `pull_request`, `workflow_dispatch`) aynı kalır.
 2. **`.github/workflows/release.yml`** — `release` (macos-latest) işi silinir. Sonuçları:
    - `release-windows`'tan `needs: release` **kaldırılır** (yoksa iş hiç çalışmaz).
@@ -305,22 +311,22 @@ Sözleşme adları neden sabit:
 
 Depo **şimdilik private kalacak**. Sonucu: Velopack `GithubSource` token'sız çalıştığı için private repodaki release'leri okuyamaz → **öz-güncelleme çalışmaz**; "Check for updates" sessizce "güncelleme yok" der (hata vermez, bu yüzden fark edilmesi zordur).
 
-Bu yüzden M6'da güncelleme yüzeyi sadeleştirilir:
+Bu yüzden M6'da güncelleme yüzeyi sadeleştirildi:
 
-- Tray menüsündeki **"Check for updates…"** öğesi kaldırılır.
-- Ayarlar → About'taki **"Check for updates…"** düğmesi ve altındaki durum satırı kaldırılır.
-- `Updater` sınıfı, `--updatecheck` tanılaması ve `VelopackApp` kancaları **kalır** (kurulum/kaldırma kancaları ve ileride public'e geçiş için gerekli).
+- Tray menüsündeki **"Check for updates…"** öğesi kaldırıldı; açılıştaki sessiz arka plan kontrolü de kaldırıldı (private repoda her açılışta boşa giden bir HTTPS denemesiydi).
+- Ayarlar → About'taki **"Check for updates…"** düğmesi ve durum satırı kaldırıldı; yerine tek satır not: "This build does not check for updates. Install a newer setup to upgrade."
+- `Updater` sınıfı (Check / DownloadAndRestart / RestartPending / IsInstalled / IsPortable / PendingRestart), `--updatecheck` tanılaması, `UpdateProgressForm` ve `VelopackApp` kancaları **kaldı** (kurulum/kaldırma kancaları ve ileride public'e geçiş için gerekli).
 
-Depo public yapılırsa: iki menü öğesi geri eklenir, başka değişiklik gerekmez (release akışı zaten private repoda da çalışıyor: tag → paket → GitHub Release).
+Depo public yapılırsa: tray öğesi, About düğmesi ve `AppHost`'taki ince bağlantı (arka plan kontrolü + `OfferUpdate`/`InstallUpdate`) geri eklenir; `Updater` API'si ve `--updatecheck` değişmez. Tespit doğrulandı (14 Kasım 2026): kurulu 1.1.0 `--updatecheck` → `installed=True channel=win`, "no update (560 ms)" — hata vermiyor, sessizce güncelleme yok diyor.
 
 #### Doğrulama (çıkış kriteri)
 
-- [ ] Temiz klonda `dotnet build windows/TinyHand.sln -c Release` ve `dotnet test` geçer (**148/148**).
-- [ ] `--m5check` **32/32**, `--m3check` PASS, `--inkcheck` 20/20, `--m4check` 71/71, e2e-m1 10/10, cursorcheck 7/7.
-- [ ] `powershell -File windows/scripts/release-windows.ps1` tam varlık setini üretir: `TinyHand-WindowsSetup.exe`, `TinyHand-Windows-portable.zip`, `releases.win.json`, `TinyHand-<sürüm>-full.nupkg` (+ `-delta.nupkg`), SHA256; portable zip içinde `current/LICENSE.txt` var.
-- [ ] `grep -ri "swift\|Package.swift\|Sources/TinyHand" --exclude-dir=.git .` yalnızca tarihsel PLAN/PROGRESS notlarını döndürür (kod/CI/README'de referans kalmaz).
-- [ ] CI: PR'da `build-windows` yeşil; `v*` tag push'unda tek iş release'i açar ve Windows varlıklarını yükler.
-- [ ] Kurulum turu: `--silent` kurulum → `--updatecheck` → `--apply` → sürüm artışı; `--uninstall` temiz.
+- [x] Temiz klonda `dotnet build windows/StickHand.sln -c Release` ve `dotnet test` geçer (**149/149** — M6'nın workflow sözleşme testi eklendi).
+- [x] `--m5check` **32/32**, `--m3check` PASS, `--inkcheck` 20/20, `--m4check` 71/71, e2e-m1 10/10, cursorcheck 7/7.
+- [x] `powershell -File windows/scripts/release-windows.ps1` tam varlık setini üretir: `StickHand-WindowsSetup.exe` (+ `.sha256`), `StickHand-Windows-portable.zip` (+ `.sha256`), `releases.win.json`, `StickHand-1.1.0-full.nupkg`; portable zip içinde `current/LICENSE.txt` var. Delta paketi yok — `-FetchPrevious` verilmedi (yerel turda önceki release indirilmez).
+- [x] `grep -ri "swift\|Package.swift\|Sources/TinyHand"` yalnızca tarihsel PLAN notlarını, üç görsel sözleşme yorumunu (`Ink.swift` / `Toolbar.swift` atıfları) ve yeni testin "swift yok" iddiasını döndürür; CI/README/build referansı kalmadı.
+- [ ] CI: PR'da `build-windows` yeşil; `v*` tag push'unda tek iş release'i açar ve Windows varlıklarını yükler. *(Yerelde koşulamaz: YAML geçerliliği ve iş yapısı doğrulandı — tek iş, `needs`/`if` yok, `gh release create`; ilk tag push'unda görülecek.)*
+- [x] Kurulum turu: `--silent` kurulum → `%LOCALAPPDATA%\StickHand` (kısayollar + kaldırma kaydı) → kurulu `--updatecheck` → `--uninstall` sonrası kısayol/registry/dizin temiz. `--apply` çalıştırılamadı: feed'de daha yeni bir release yok (private repo, bu branch'ten yayın çıkmadı).
 
 #### Notlar / riskler
 
@@ -328,7 +334,7 @@ Depo public yapılırsa: iki menü öğesi geri eklenir, başka değişiklik ger
 - Fork upstream'den ayrışır; upstream'den gelen değişiklikleri almak artık elle merge demektir (beklenen sonuç).
 - `windows/PLAN.md`'deki "ortak davranış sözleşmeleri" bölümü macOS referansına dayanıyor; macOS kodu gittikten sonra bu sözleşmeler **spesifikasyon** olarak kalır (state.json, URL grameri, 36 stil + lazer, 15 ses, mürekkep rengi, fade). Silinmez.
 - Asset lisansı: PNG/WAV'lar MIT kapsamında kalır; `LICENSE` iki satırıyla korunur. Yeni asset üretilirse bu not güncellenir.
-- **Repo public olmalı (14 Kasım 2026 tespiti):** `berkayelagoz/tinyhand` şu an **private** (API 404). Velopack `GithubSource` token'sız çalıştığı için private repoda release'leri okuyamaz → "Check for updates" sessizce "güncelleme yok" der. İlk release'ten önce repo public yapılır (Settings → General → Change visibility). Uygulamaya token gömmek alternatif değildir: token herkese dağıtılır.
+- **Repo private (14 Kasım 2026 kararı):** `berkayelagoz/stickhand` private kalıyor. Velopack `GithubSource` token'sız çalıştığı için private repoda release'leri okuyamaz → öz-güncelleme yok; güncelleme yüzeyi M6'da kaldırıldı (bkz. "Private repo kararı"). Public'e geçilirse güncelleme yüzeyi geri eklenir. Uygulamaya token gömmek alternatif değildir: token herkese dağıtılır.
 - **Sıra:** repo adı → yerel `git remote set-url` → kod rename'i (yukarıdaki tablo) → ilk release. Kod, repo'nun yeni adresini gösterdiği anda repo o adreste olmalı.
 - Fork ise: ad değişse de "forked from nilbuild/tinyhand" etiketi kalır; kendi ürünü olacaksa Settings → Leave fork network ile ayrılır (geri alınamaz).
 
