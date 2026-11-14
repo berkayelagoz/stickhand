@@ -3,6 +3,7 @@ using System.Drawing;
 using System.Runtime.InteropServices;
 using TinyHand.Interop;
 using TinyHand.Logic;
+using Velopack;
 
 namespace TinyHand;
 
@@ -15,6 +16,7 @@ internal sealed class AppHost : ApplicationContext
 {
     private readonly NotifyIcon _trayIcon;
     private readonly ToolStripMenuItem _toggleItem;
+    private readonly ToolStripMenuItem _updateItem;
     private readonly OverlayController _controller = new();
     private readonly HotkeyHost _hotkeys;
     private readonly Icon _icon;
@@ -23,6 +25,10 @@ internal sealed class AppHost : ApplicationContext
     private readonly SingleInstance _single;
     private SettingsWindow? _settings;
     private WelcomeWindow? _welcome;
+    private UpdateInfo? _pendingUpdate;
+    private bool _checkingUpdates;
+    private bool _installing;
+    private bool _disposed;
 
     public AppHost(SingleInstance single)
     {
@@ -61,6 +67,9 @@ internal sealed class AppHost : ApplicationContext
         var makeHandItem = new ToolStripMenuItem("Make your own hand…");
         makeHandItem.Click += (_, _) => ShowMakeHand();
 
+        _updateItem = new ToolStripMenuItem("Check for updates…");
+        _updateItem.Click += (_, _) => CheckForUpdates(interactive: true);
+
         var exitItem = new ToolStripMenuItem("Exit TinyHand");
         exitItem.Click += (_, _) => Exit();
 
@@ -70,6 +79,7 @@ internal sealed class AppHost : ApplicationContext
         menu.Items.Add(settingsItem);
         menu.Items.Add(welcomeItem);
         menu.Items.Add(makeHandItem);
+        menu.Items.Add(_updateItem);
         menu.Items.Add(new ToolStripSeparator());
         menu.Items.Add(exitItem);
 
@@ -102,8 +112,114 @@ internal sealed class AppHost : ApplicationContext
         // Open on launch so the pointer is immediately usable (macOS starts active).
         _controller.SetActive(true);
 
+        // Velopack self-update (macOS: Sparkle). A dev build is not installed, so the
+        // background check is skipped and the tray item explains why.
+        if (Updater.IsInstalled)
+            _ = Task.Run(CheckForUpdatesInBackground);
+
         if (!Preferences.WelcomeShown)
             ShowWelcome();
+    }
+
+    // =====================================================================
+    // Self-update (Velopack)
+    // =====================================================================
+
+    private void CheckForUpdatesInBackground()
+    {
+        // Let the overlay and the tray settle before touching the network.
+        Thread.Sleep(4000);
+        var update = Updater.Check();
+        if (update is null || _disposed) return;
+        _ui.Post(_ => OfferUpdate(update), null);
+    }
+
+    /// <summary>Tray item: check now, or install the release the background check found.</summary>
+    private void CheckForUpdates(bool interactive)
+    {
+        if (_pendingUpdate is { } pending)
+        {
+            InstallUpdate(pending);
+            return;
+        }
+
+        if (!Updater.IsInstalled)
+        {
+            if (interactive)
+                MessageBox.Show(
+                    $"This build (version {Updater.Version}) is not installed, so it cannot update itself.\n\n" +
+                    "Install TinyHand with the Windows setup and it will keep itself up to date.",
+                    "TinyHand", MessageBoxButtons.OK, MessageBoxIcon.Information);
+            return;
+        }
+
+        if (_checkingUpdates) return;
+        _checkingUpdates = true;
+        _updateItem.Enabled = false;
+        _updateItem.Text = "Checking for updates…";
+
+        _ = Task.Run(() =>
+        {
+            var update = Updater.Check();
+            _ui.Post(_ =>
+            {
+                _checkingUpdates = false;
+                _updateItem.Enabled = true;
+                if (update is not null)
+                {
+                    OfferUpdate(update);
+                    return;
+                }
+                _updateItem.Text = "Check for updates…";
+                if (interactive)
+                    MessageBox.Show($"TinyHand {Updater.Version} is the latest version.",
+                        "TinyHand", MessageBoxButtons.OK, MessageBoxIcon.Information);
+            }, null);
+        });
+    }
+
+    private void OfferUpdate(UpdateInfo update)
+    {
+        if (_disposed) return;
+        _pendingUpdate = update;
+        string version = Updater.Describe(update.TargetFullRelease);
+        _updateItem.Text = $"Update to {version}…";
+        _trayIcon.ShowBalloonTip(5000, "TinyHand update available",
+            $"Version {version} is ready to install.", ToolTipIcon.Info);
+    }
+
+    private void InstallUpdate(UpdateInfo update)
+    {
+        if (_installing) return;
+        string version = Updater.Describe(update.TargetFullRelease);
+        var answer = MessageBox.Show(
+            $"TinyHand {version} is ready. The app closes and restarts to finish the update.",
+            "Install update?", MessageBoxButtons.OKCancel, MessageBoxIcon.Question);
+        if (answer != DialogResult.OK) return;
+
+        _installing = true;
+        var progress = new UpdateProgressForm(version);
+        progress.Show();
+
+        // The download blocks, so it runs off the UI thread; the progress form marshals its
+        // own updates back. Velopack exits the process when the update is applied.
+        _ = Task.Run(() =>
+        {
+            try
+            {
+                Updater.DownloadAndRestart(update, progress.SetProgress);
+            }
+            catch (Exception ex)
+            {
+                _ui.Post(_ =>
+                {
+                    _installing = false;
+                    progress.Close();
+                    MessageBox.Show($"The update could not be installed: {ex.Message}",
+                        "TinyHand", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                }, null);
+            }
+        });
     }
 
     private void OnCustomHandsChanged()
@@ -164,7 +280,8 @@ internal sealed class AppHost : ApplicationContext
         _controller.SetActive(false);
         if (_settings is null || _settings.IsDisposed)
         {
-            _settings = new SettingsWindow(_controller, ApplyToggleShortcut, ApplyClearShortcut, OnRecording);
+            _settings = new SettingsWindow(_controller, ApplyToggleShortcut, ApplyClearShortcut, OnRecording,
+                () => CheckForUpdates(interactive: true));
             _settings.FormClosed += (_, _) => _settings = null;
         }
         _settings.Show();
@@ -274,6 +391,7 @@ internal sealed class AppHost : ApplicationContext
     {
         if (disposing)
         {
+            _disposed = true;
             _trayIcon.Visible = false;
             _trayIcon.Dispose();
             _hotkeys.Dispose();

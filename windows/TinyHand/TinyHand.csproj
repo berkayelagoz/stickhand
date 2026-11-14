@@ -12,6 +12,15 @@
     <ApplicationHighDpiMode>PerMonitorV2</ApplicationHighDpiMode>
     <AssemblyName>TinyHand</AssemblyName>
     <RootNamespace>TinyHand</RootNamespace>
+    <!-- One version for both apps: the repository VERSION file is the release tag, so the
+         Windows package and the macOS DMG always ship the same number. FileVersion and
+         ProductVersion are derived from Version by the SDK, so a release build that passes
+         -p:Version=<tag> keeps every version field in step. -->
+    <TinyHandVersion>$([System.IO.File]::ReadAllText('$(MSBuildThisFileDirectory)..\..\VERSION').Trim())</TinyHandVersion>
+    <Version>$(TinyHandVersion)</Version>
+    <Product>TinyHand</Product>
+    <AssemblyTitle>TinyHand</AssemblyTitle>
+    <Company>Kamran Ahmed</Company>
   </PropertyGroup>
 
   <ItemGroup>
@@ -20,6 +29,7 @@
 
   <ItemGroup>
     <PackageReference Include="NAudio" Version="2.2.1" />
+    <PackageReference Include="Velopack" Version="1.2.161" />
   </ItemGroup>
 
   <!-- Shared assets live at the repository root (the macOS app bundles the same files):

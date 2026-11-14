@@ -406,9 +406,16 @@ public sealed class HandScene
     // Pointer (hand or laser)
     // =====================================================================
 
+    /// <summary>True when this monitor draws the pointer: the arm hangs from the bottom edge of
+    /// the screen the cursor is on. Drawing it on every monitor left a second arm reaching
+    /// across the neighbouring screen (M5 multi-monitor pass).</summary>
+    public static bool DrawsPointerOn(Rectangle monitor, Point cursor) => monitor.Contains(cursor);
+
     private static void DrawPointer(ID2D1DeviceContext ctx, SceneResources res, MonitorInfo monitor,
         in SceneSnapshot scene, int scale, float ox, float oy)
     {
+        if (!DrawsPointerOn(monitor.Bounds, scene.Cursor)) return;
+
         var cursor = new PointF(scene.Cursor.X, scene.Cursor.Y);
         if (scene.Laser)
         {

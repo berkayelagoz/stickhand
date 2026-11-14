@@ -27,3 +27,7 @@ jobs:
         run: dotnet build windows/TinyHand.sln -c Release
       - name: Test (Windows)
         run: dotnet test windows/TinyHand.sln -c Release --no-build
+      # The release publishes self-contained; catch a broken publish (missing runtime
+      # pack, bad version plumbing) here instead of on the release tag.
+      - name: Publish (Windows, self-contained)
+        run: dotnet publish windows/TinyHand/TinyHand.csproj -c Release -r win-x64 --self-contained true -o windows/dist/publish

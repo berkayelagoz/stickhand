@@ -229,6 +229,10 @@ public sealed class OverlayController : IDisposable
     /// <summary>Toolbar layout currently hit-tested by the hook (harness: geometry).</summary>
     public ToolbarLayout? Toolbar => _toolbar;
 
+    /// <summary>Live overlay windows, one per monitor (harness: multi-monitor + DPI pass).</summary>
+    public IReadOnlyList<(MonitorInfo Monitor, Rectangle Bounds, IntPtr Handle)> OverlayWindows =>
+        _overlays?.Select(part => (part.Monitor, part.Window.Bounds, part.Window.Handle)).ToList() ?? [];
+
     // Composition timing instrumentation (fpscheck harness).
     private long _drawTicks, _presentTicks, _frameSamples;
     public double DrawAvgMs => Volatile.Read(ref _frameSamples) == 0 ? 0 : _drawTicks / (double)Volatile.Read(ref _frameSamples) * 1000.0 / Stopwatch.Frequency;
@@ -609,6 +613,18 @@ public sealed class OverlayController : IDisposable
     // Pose (press animation + grip smoothing), advanced once per frame
     // =====================================================================
 
+    /// <summary>The monitor the cursor is on (the arm hangs from that screen's bottom edge).</summary>
+    private MonitorInfo? CursorMonitor()
+    {
+        var overlays = _overlays;
+        if (overlays is null) return _primaryMonitor;
+        int x = (int)Interlocked.Read(ref _cursorX);
+        int y = (int)Interlocked.Read(ref _cursorY);
+        foreach (var part in overlays)
+            if (part.Monitor.Bounds.Contains(x, y)) return part.Monitor;
+        return _primaryMonitor;
+    }
+
     private void AdvancePose()
     {
         long now = Stopwatch.GetTimestamp();
@@ -620,8 +636,11 @@ public sealed class OverlayController : IDisposable
         var primary = _primaryMonitor;
         if (primary is not null)
         {
+            // The arm hangs from the bottom edge of the monitor the cursor is on, so the grip
+            // lean is measured against that monitor (M5 multi-monitor pass).
+            var monitor = CursorMonitor() ?? primary;
             float cursorX = Interlocked.Read(ref _cursorX);
-            float target = HandPoseSolver.GripTargetX(cursorX, primary.Bounds);
+            float target = HandPoseSolver.GripTargetX(cursorX, monitor.Bounds);
             if (!_gripInit)
             {
                 _gripX = target;

@@ -85,3 +85,61 @@ jobs:
       - name: Remove the signing keychain
         if: always()
         run: security delete-keychain "$RUNNER_TEMP/signing.keychain-db" 2>/dev/null || true
+
+  # Windows package for the same release: the macOS job above creates the release, this
+  # job adds the installer, the portable bundle and the Velopack channel feed to it.
+  # One release, two platform packages.
+  release-windows:
+    runs-on: windows-latest
+    timeout-minutes: 60
+    needs: release
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      # .NET 10 SDK is pinned by global.json; the runner's default SDK is not trusted.
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.404'
+
+      - name: Install the Velopack CLI
+        shell: pwsh
+        run: |
+          dotnet tool install --global vpk
+          "$env:USERPROFILE\.dotnet\tools" | Out-File -FilePath $env:GITHUB_PATH -Append -Encoding utf8
+
+      - name: Build the Windows release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          $version = (Get-Content VERSION -Raw).Trim()
+          if ("${{ github.ref_name }}" -match '^v(.+)$') { $version = $Matches[1] }
+          ./windows/scripts/release-windows.ps1 -Version $version -FetchPrevious
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: TinyHand-windows
+          path: |
+            windows/dist/release/TinyHand-WindowsSetup.exe
+            windows/dist/release/TinyHand-Windows-portable.zip
+            windows/dist/release/*.sha256
+            windows/dist/release/releases.win.json
+            windows/dist/release/*.nupkg
+
+      - name: Add the Windows assets to the release
+        if: startsWith(github.ref, 'refs/tags/v')
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          $assets = @(
+            "windows/dist/release/TinyHand-WindowsSetup.exe",
+            "windows/dist/release/TinyHand-WindowsSetup.exe.sha256",
+            "windows/dist/release/TinyHand-Windows-portable.zip",
+            "windows/dist/release/TinyHand-Windows-portable.zip.sha256",
+            "windows/dist/release/releases.win.json"
+          )
+          $assets += Get-ChildItem "windows/dist/release/*.nupkg" | ForEach-Object { $_.FullName }
+          gh release upload "${{ github.ref_name }}" @assets --clobber

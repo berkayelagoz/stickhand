@@ -37,6 +37,7 @@ internal sealed class SettingsWindow : Form
     private readonly Func<Hotkey, bool> _applyToggle;
     private readonly Func<Hotkey, bool> _applyClear;
     private readonly Action<bool> _onRecording;
+    private readonly Action? _checkForUpdates;
     private readonly Panel _page = new() { Dock = DockStyle.Fill, AutoScroll = true, BackColor = PageBack };
     private readonly List<(SettingsSection Section, Button Button)> _nav = new();
     private readonly ToolTip _tips = new();
@@ -56,12 +57,14 @@ internal sealed class SettingsWindow : Form
         OverlayController controller,
         Func<Hotkey, bool> applyToggle,
         Func<Hotkey, bool> applyClear,
-        Action<bool> onRecording)
+        Action<bool> onRecording,
+        Action? checkForUpdates = null)
     {
         _controller = controller;
         _applyToggle = applyToggle;
         _applyClear = applyClear;
         _onRecording = onRecording;
+        _checkForUpdates = checkForUpdates;
 
         Text = "TinyHand Settings";
         ClientSize = new Size(840, 620);
@@ -759,7 +762,7 @@ internal sealed class SettingsWindow : Form
 
     private void BuildAbout(TableLayoutPanel content)
     {
-        string version = typeof(SettingsWindow).Assembly.GetName().Version?.ToString(3) ?? "dev";
+        string version = Updater.Version;
         content.Controls.Add(new Label
         {
             Text = "TinyHand",
@@ -780,6 +783,21 @@ internal sealed class SettingsWindow : Form
             LinkRow("Website", "tinyhand.app", "https://tinyhand.app"),
             LinkRow("Source code", "github.com/nilbuild/tinyhand", "https://github.com/nilbuild/tinyhand"),
             LinkRow("License", "MIT", "https://github.com/nilbuild/tinyhand/blob/main/LICENSE"));
+
+        if (_checkForUpdates is not null)
+        {
+            content.Controls.Add(ActionButton("Check for updates…", _checkForUpdates));
+            content.Controls.Add(new Label
+            {
+                Text = Updater.IsInstalled
+                    ? "TinyHand updates itself from GitHub releases."
+                    : "This build is not installed, so it cannot update itself.",
+                AutoSize = true,
+                ForeColor = Muted,
+                Font = new Font(Font.FontFamily, 8.25f),
+                Margin = new Padding(4, 0, 0, 8),
+            });
+        }
 
         content.Controls.Add(ActionButton("Reset all settings…", ResetAll));
     }

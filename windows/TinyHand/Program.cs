@@ -1,6 +1,7 @@
 using System.Runtime.InteropServices;
 using TinyHand.Interop;
 using TinyHand.Logic;
+using Velopack;
 
 namespace TinyHand;
 
@@ -14,6 +15,14 @@ internal static class Program
     [STAThread]
     private static int Main(string[] args)
     {
+        // Velopack install/update/uninstall hooks run before anything else: the setup
+        // launches the app with --veloapp-* arguments and expects it to handle them and
+        // exit. A dev build (not installed) falls straight through.
+        VelopackApp.Build()
+            .SetAutoApplyOnStartup(true)
+            .SetAppUserModelId("com.kamranahmed.tinyhand")
+            .Run();
+
         if (args.Contains("--spike"))
             return SpikeRunner.Run(Rest(args));
 
@@ -31,6 +40,12 @@ internal static class Program
 
         if (args.Contains("--m4check"))
             return M4Check.Run(Rest(args));
+
+        if (args.Contains("--m5check"))
+            return M5Check.Run(Rest(args));
+
+        if (args.Contains("--updatecheck"))
+            return UpdateCheck.Run(args);
 
         if (args.Contains("--toolbargeom"))
             return M3Check.PrintGeometry();

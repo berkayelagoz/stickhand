@@ -384,6 +384,12 @@ public static class User32
     [return: MarshalAs(UnmanagedType.Bool)]
     public static extern bool GetCursorPos(out POINT lpPoint);
 
+    /// <summary>Global cursor visibility (the multi-monitor harness checks that the real
+    /// cursor stays hidden on every monitor, not just the primary).</summary>
+    [DllImport("user32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    public static extern bool GetCursorInfo(ref CURSORINFO pci);
+
     [DllImport("user32.dll")]
     [return: MarshalAs(UnmanagedType.Bool)]
     public static extern bool SetCursor(IntPtr hCursor);
@@ -441,7 +447,28 @@ public static class Win32Input
     public const uint MOUSEEVENTF_LEFTDOWN = 0x0002;
     public const uint MOUSEEVENTF_LEFTUP = 0x0004;
     public const uint MOUSEEVENTF_ABSOLUTE = 0x8000;
+
+    /// <summary>Absolute coordinates map onto the virtual desktop instead of the primary
+    /// monitor: required to inject input on a secondary monitor.</summary>
+    public const uint MOUSEEVENTF_VIRTUALDESK = 0x4000;
+
     public const uint KEYEVENTF_KEYUP = 0x0002;
+}
+
+/// <summary>Cursor position and visibility (GetCursorInfo).</summary>
+[StructLayout(LayoutKind.Sequential)]
+public struct CURSORINFO
+{
+    public int cbSize;
+    public uint flags;
+    public IntPtr hCursor;
+    public POINT ptScreenPos;
+}
+
+public static class Win32Cursor
+{
+    /// <summary>CURSOR_SHOWING: the cursor is drawn; without it the cursor is hidden.</summary>
+    public const uint CURSOR_SHOWING = 0x0001;
 }
 
 [StructLayout(LayoutKind.Sequential)]
