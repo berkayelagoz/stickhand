@@ -301,6 +301,18 @@ Sözleşme adları neden sabit:
 5. **`windows/PLAN.md` / `windows/PROGRESS.md`** — başa tek satır not: "macOS uygulaması M6'da çıkarıldı; aşağıdaki macOS referansları tarihsel kayıttır, davranış sözleşmeleri (state.json, URL grameri, stil kümesi, ses seti, mürekkep rengi) hâlâ geçerlidir." M1–M5 kayıtları silinmez (geçmiş).
 6. **`docs/`** (tinyhand.app sitesi) — ayrı karar: kalabilir (indirme linkleri Windows'a çevrilir) veya çıkarılır. Windows portuyla ilgisi yok, build'i etkilemez.
 
+#### Private repo kararı (14 Kasım 2026)
+
+Depo **şimdilik private kalacak**. Sonucu: Velopack `GithubSource` token'sız çalıştığı için private repodaki release'leri okuyamaz → **öz-güncelleme çalışmaz**; "Check for updates" sessizce "güncelleme yok" der (hata vermez, bu yüzden fark edilmesi zordur).
+
+Bu yüzden M6'da güncelleme yüzeyi sadeleştirilir:
+
+- Tray menüsündeki **"Check for updates…"** öğesi kaldırılır.
+- Ayarlar → About'taki **"Check for updates…"** düğmesi ve altındaki durum satırı kaldırılır.
+- `Updater` sınıfı, `--updatecheck` tanılaması ve `VelopackApp` kancaları **kalır** (kurulum/kaldırma kancaları ve ileride public'e geçiş için gerekli).
+
+Depo public yapılırsa: iki menü öğesi geri eklenir, başka değişiklik gerekmez (release akışı zaten private repoda da çalışıyor: tag → paket → GitHub Release).
+
 #### Doğrulama (çıkış kriteri)
 
 - [ ] Temiz klonda `dotnet build windows/TinyHand.sln -c Release` ve `dotnet test` geçer (**148/148**).
