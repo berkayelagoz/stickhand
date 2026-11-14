@@ -93,6 +93,10 @@ jobs:
     runs-on: windows-latest
     timeout-minutes: 60
     needs: release
+    # A tag push needs the macOS job to have created the release first (one release, two
+    # platform packages). A manual run builds the Windows package even when the macOS job
+    # cannot run — a fork without the Apple secrets still gets a testable installer.
+    if: always() && (needs.release.result == 'success' || github.event_name == 'workflow_dispatch')
     permissions:
       contents: write
     steps:
