@@ -390,9 +390,9 @@ M6'da kaldırılan üç parça geri gelir; `Updater`, `--updatecheck`, `UpdatePr
 #### M7.6 — Public hijyen
 
 - [x] Secret taraması: GitHub secret scanning public repoda açık, **0 uyarı** (14 Kasım 2026).
-- [x] `main` branch protection: **force-push ve silme kapalı**. PR zorunluluğu bilinçli olarak açılmadı — doğrudan `main`'e push akışı korunuyor; istenirse `required_pull_request_reviews` ile açılır.
+- [x] `main` branch protection: **PR zorunlu** (`enforce_admins` açık — sahibi de doğrudan push edemez), 0 onay yeterli (tek kişilik repo kendi PR'ını merge edebilsin), stale review'lar düşer, force-push ve silme kapalı. Doğrulandı: doğrudan push `GH006: Changes must be made through a pull request` ile reddedildi.
 - [ ] Issue/PR şablonları (opsiyonel).
-- **Çıkış:** force-push ve silme kapalı, açık secret uyarısı yok. Doğrudan push hâlâ açık — bu bir karar, kaza değil.
+- **Çıkış:** doğrudan push kapalı (PR zorunlu), force-push ve silme kapalı, açık secret uyarısı yok.
 
 ## Açık kararlar (kullanıcı)
 
