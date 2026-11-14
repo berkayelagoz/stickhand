@@ -217,6 +217,25 @@ Amaç: `only_windows` branch'inde depoyu **yalnızca Windows uygulaması** olara
 
 **Hukuk (karar verildi, 14 Kasım 2026):** MIT "modify" hakkını verdiği için macOS kodunu silmek serbesttir. Telif satırı **kalır**, çünkü depoda Kamran Ahmed'in assetleri (36 el PNG'si + 15 tap sesi) dağıtılmaya devam ediyor. `LICENSE` zaten iki satırı taşıyor (`Kamran Ahmed` + `Berkay Elagöz (Windows port)`); bu dosya silinmez, değiştirilmez. Assetler de kendi üretilenlerle değiştirilirse satır zorunlu olmaktan çıkar (tavsiye: yine de tutulur). "TinyHand" adı ve logosu MIT kapsamında değildir; yayın adı ayrı bir karardır.
 
+#### İsimler (repo adı ≠ ürün adı ≠ sözleşme adları)
+
+Üç ayrı "isim" var; yalnız ilk ikisi değiştirilebilir:
+
+| İsim | Nerede geçiyor | Değişebilir mi |
+|---|---|---|
+| **GitHub repo adı** (`berkayelagoz/tinyhand`) | `git remote`, README linkleri, `Updater.RepositoryUrl` | **Evet, kozmetik.** Değişirse: `git remote set-url origin <yeni>`, `Updater.RepositoryUrl`, README indirme linkleri. GitHub eski URL'yi yönlendirir ama Velopack `GithubSource` API'yi kullandığı için adresi açıkça güncellemek gerekir |
+| **Ürün adı** ("TinyHand") | pencere başlıkları, tray, kurulum sihirbazı, README | **Evet, ama marka kararı.** MIT kodu kapsar, adı ve logoyu kapsamaz. Kendi adınla yayınlayacaksan değiştir; upstream'in adını kullanacaksan README'de "TinyHand by Kamran Ahmed — Windows portu" demek yeterli |
+| **Sözleşme adları** | `tinyhand://`, `%APPDATA%\TinyHand`, Velopack `packId: TinyHand`, `TinyHand.exe` | **Hayır — değiştirme** |
+
+Sözleşme adları neden sabit:
+
+- `tinyhand://` — HKCU'ya kayıtlı protokol. Değişirse mevcut kısayollar, Raycast/PowerShell otomasyonu ve `state.json` sözleşmesi (macOS ile ortak gramer) ölür.
+- `%APPDATA%\TinyHand` — `state.json`, `settings.json`, `Hands/`. Değişirse kullanıcının ayarları, custom elleri ve state sözleşmesi bozulur.
+- `packId: TinyHand` (`installer/velopack.json`) — Velopack kimliği. Değişirse **kurulu uygulamalar güncelleme görmez**: Velopack yeni `packId`'yi ayrı bir uygulama sayar, mevcut kurulumlar `releases.win.json`'daki paketi kendine ait bulmaz.
+- `TinyHand.exe` — `mainExe`, kısayol hedefi, protokol komutu (`"<exe>" "%1"`).
+
+Özet: repo adını değiştirmek istersen değiştir, ürün adını değiştirmek marka kararıdır; ama `packId`, protokol şeması, AppData klasörü ve exe adı **aynı kalmalı**.
+
 #### Silinecekler
 
 | Yol | Ne |
