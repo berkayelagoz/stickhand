@@ -5,11 +5,11 @@
 
 .DESCRIPTION
     Output (windows/dist/release by default):
-      TinyHand-WindowsSetup.exe        Velopack installer (first install + updates)
-      TinyHand-Windows-portable.zip    unpacked bundle, no install, no self-update
+      StickHand-WindowsSetup.exe        Velopack installer (first install + updates)
+      StickHand-Windows-portable.zip    unpacked bundle, no install, no self-update
       releases.<channel>.json          channel feed the installed app polls
-      TinyHand-<version>-<channel>-full.nupkg    full package
-      TinyHand-<version>-<channel>-delta.nupkg   delta package (when a previous
+      StickHand-<version>-<channel>-full.nupkg    full package
+      StickHand-<version>-<channel>-delta.nupkg   delta package (when a previous
                                                  release is present in the output dir)
       *.sha256                         checksums for the two user-facing files
 
@@ -52,12 +52,12 @@ if (-not $OutputDir) { $OutputDir = Join-Path $windowsRoot "dist/release" }
 $publishDir = Join-Path $windowsRoot "dist/publish"
 $outputPath = [System.IO.Path]::GetFullPath($OutputDir)
 
-Write-Host "==> TinyHand $Version ($Channel) -> $outputPath"
+Write-Host "==> StickHand $Version ($Channel) -> $outputPath"
 
 if (-not $NoPublish) {
     Write-Host "==> Publishing self-contained $($config.runtime)"
     if (Test-Path $publishDir) { Remove-Item $publishDir -Recurse -Force }
-    dotnet publish (Join-Path $windowsRoot "TinyHand/TinyHand.csproj") `
+    dotnet publish (Join-Path $windowsRoot "StickHand/StickHand.csproj") `
         -c Release `
         -r $config.runtime `
         --self-contained true `

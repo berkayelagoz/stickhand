@@ -16,7 +16,7 @@
 # Run: powershell -STA -ExecutionPolicy Bypass -File cursorcheck-m1.ps1
 
 $ErrorActionPreference = 'Stop'
-$TinyHandExe = Join-Path $PSScriptRoot '..\TinyHand\bin\Debug\net10.0-windows\TinyHand.exe'
+$TinyHandExe = Join-Path $PSScriptRoot '..\StickHand\bin\Debug\net10.0-windows\StickHand.exe'
 
 Add-Type -TypeDefinition @'
 using System;
@@ -106,7 +106,7 @@ $form.Cursor = [System.Windows.Forms.Cursors]::Default # known: plain arrow
 
 $app = $null
 try {
-    Get-Process -Name TinyHand -ErrorAction SilentlyContinue | Stop-Process -Force
+    Get-Process -Name StickHand -ErrorAction SilentlyContinue | Stop-Process -Force
     [void][W]::SystemParametersInfo(0x57, 0, [IntPtr]::Zero, 0) # heal from earlier runs
     Pump 300
     $form.Show()
@@ -129,7 +129,7 @@ try {
 
     # Keep the real profile clean and skip the first-run card (M4).
     $env:TH_WELCOME_SHOWN = '1'
-    $env:TH_SETTINGS_DIR = Join-Path $env:TEMP 'tinyhand-e2e'
+    $env:TH_SETTINGS_DIR = Join-Path $env:TEMP 'stickhand-e2e'
     Remove-Item -Recurse -Force $env:TH_SETTINGS_DIR -ErrorAction SilentlyContinue
     $app = Start-Process -FilePath $TinyHandExe -PassThru
     Pump 3500 # auto-activate (draw mode)
@@ -192,7 +192,7 @@ finally {
     try { $form.Close() } catch {}
     Pump 200
     if ($app -and -not $app.HasExited) { Stop-Process -Id $app.Id -Force -ErrorAction SilentlyContinue }
-    Get-Process -Name TinyHand -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+    Get-Process -Name StickHand -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
     [void][W]::SystemParametersInfo(0x57, 0, [IntPtr]::Zero, 0) # safety
 }
 

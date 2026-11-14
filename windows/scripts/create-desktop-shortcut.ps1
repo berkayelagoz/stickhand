@@ -9,8 +9,8 @@
 
 $ErrorActionPreference = 'Stop'
 $RepoDir = Split-Path $PSScriptRoot -Parent   # windows/
-$ExePath = Join-Path $RepoDir 'TinyHand\bin\Debug\net10.0-windows\TinyHand.exe'
-$IconPath = Join-Path $RepoDir 'TinyHand\assets\appicon.ico'
+$ExePath = Join-Path $RepoDir 'StickHand\bin\Debug\net10.0-windows\StickHand.exe'
+$IconPath = Join-Path $RepoDir 'StickHand\assets\appicon.ico'
 
 Add-Type -AssemblyName System.Drawing
 
@@ -72,7 +72,7 @@ function New-AppIcon([string]$path) {
 }
 
 if (-not (Test-Path $ExePath)) {
-    Write-Error "TinyHand.exe bulunamadi: $ExePath (once dotnet build TinyHand.sln)"
+    Write-Error "StickHand.exe bulunamadi: $ExePath (once dotnet build StickHand.sln)"
 }
 
 if (-not (Test-Path $IconPath)) {
@@ -81,13 +81,13 @@ if (-not (Test-Path $IconPath)) {
 }
 
 $desktop = [Environment]::GetFolderPath([Environment+SpecialFolder]::Desktop)
-$lnkPath = Join-Path $desktop 'TinyHand.lnk'
+$lnkPath = Join-Path $desktop 'StickHand.lnk'
 $wsh = New-Object -ComObject WScript.Shell
 $lnk = $wsh.CreateShortcut($lnkPath)
 $lnk.TargetPath = $ExePath
 $lnk.WorkingDirectory = Split-Path $ExePath -Parent
 $lnk.IconLocation = "$IconPath,0"
-$lnk.Description = 'TinyHand drawing overlay (M1 prototype)'
+$lnk.Description = 'StickHand drawing overlay (M1 prototype)'
 $lnk.Save()
 Write-Host "shortcut created: $lnkPath"
 Write-Host "target: $ExePath"

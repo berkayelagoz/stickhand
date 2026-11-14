@@ -1,11 +1,11 @@
 {
-  "packId": "TinyHand",
-  "packTitle": "TinyHand",
+  "packId": "StickHand",
+  "packTitle": "StickHand",
   "packAuthors": "Kamran Ahmed",
   "channel": "win",
-  "mainExe": "TinyHand.exe",
+  "mainExe": "StickHand.exe",
   "runtime": "win-x64",
-  "icon": "TinyHand/assets/appicon.ico",
-  "setupName": "TinyHand-WindowsSetup.exe",
-  "portableName": "TinyHand-Windows-portable.zip"
+  "icon": "StickHand/assets/appicon.ico",
+  "setupName": "StickHand-WindowsSetup.exe",
+  "portableName": "StickHand-Windows-portable.zip"
 }

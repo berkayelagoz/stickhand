@@ -15,7 +15,7 @@
 # Run: powershell -STA -ExecutionPolicy Bypass -File e2e-m1.ps1
 
 $ErrorActionPreference = 'Stop'
-$TinyHandExe = Join-Path $PSScriptRoot '..\TinyHand\bin\Debug\net10.0-windows\TinyHand.exe'
+$TinyHandExe = Join-Path $PSScriptRoot '..\StickHand\bin\Debug\net10.0-windows\StickHand.exe'
 $ResultFile  = Join-Path $PSScriptRoot '..\e2e-m1-result.txt'
 
 Add-Type -MemberDefinition @'
@@ -105,7 +105,7 @@ function PixelAt([int]$x, [int]$y) {
 $app = $null
 try {
     # ---------------------------------------------------------------- launch
-    Get-Process -Name TinyHand -ErrorAction SilentlyContinue | Stop-Process -Force
+    Get-Process -Name StickHand -ErrorAction SilentlyContinue | Stop-Process -Force
     [void][E2E.Win]::SystemParametersInfo(0x57, 0, [IntPtr]::Zero, 0) # SPI_SETCURSORS: reset cursor state
     Pump 300
 
@@ -114,7 +114,7 @@ try {
 
     # Keep the real profile clean and skip the first-run card (M4).
     $env:TH_WELCOME_SHOWN = '1'
-    $env:TH_SETTINGS_DIR = Join-Path $env:TEMP 'tinyhand-e2e'
+    $env:TH_SETTINGS_DIR = Join-Path $env:TEMP 'stickhand-e2e'
     Remove-Item -Recurse -Force $env:TH_SETTINGS_DIR -ErrorAction SilentlyContinue
     $app = Start-Process -FilePath $TinyHandExe -PassThru
     Pump 3500 # app auto-activates: overlay + hooks up
@@ -194,7 +194,7 @@ finally {
     try { $form.Close() } catch {}
     Pump 300
     if ($app -and -not $app.HasExited) { Stop-Process -Id $app.Id -Force -ErrorAction SilentlyContinue }
-    Get-Process -Name TinyHand -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+    Get-Process -Name StickHand -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
     [void][E2E.Win]::SystemParametersInfo(0x57, 0, [IntPtr]::Zero, 0) # safety: restore cursor schemes
 }
 

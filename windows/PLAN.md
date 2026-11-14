@@ -1,4 +1,6 @@
-# TinyHand — Windows Port Planı
+# StickHand — Windows Planı
+
+> **Ad değişikliği (14 Kasım 2026):** ürünün adı **StickHand** oldu; depo `berkayelagoz/stickhand`. Aşağıdaki M1–M5 kayıtları "TinyHand" adıyla yazıldığı için tarihseldir — davranış sözleşmeleri (state.json şeması, URL grameri, 36 stil + lazer, 15 ses, mürekkep rengi, fade) hâlâ geçerlidir. Yeniden adlandırma tablosu: M6 → "İsim kararı".
 
 Kaynak: macOS uygulaması (`Sources/TinyHand/`, Swift/AppKit). Hedef: özellik eşliği, tek depoda iki ayrı uygulama. Kod tabanı paylaşılmaz; eşliği garanti eden ortak davranış sözleşmeleri ve varlıklar (aşağıda ayrı bölüm).
 
@@ -236,9 +238,11 @@ Sözleşme adları neden sabit:
 
 Özet: repo adını değiştirmek istersen değiştir, ürün adını değiştirmek marka kararıdır; ama `packId`, protokol şeması, AppData klasörü ve exe adı **aynı kalmalı**.
 
-#### İsim kararı (14 Kasım 2026): **StickHand**
+#### İsim kararı (14 Kasım 2026): **StickHand** — UYGULANDI
 
 Ürün adı **StickHand** olur. Gerekçe: "el + değnek" görsel kimliğini korur (TinyHand ile aynı ailede okunur), kısa ve `stickhand://` / `%APPDATA%\StickHand` / `StickHand.exe` olarak temiz durur. Kontrol (14 Kasım 2026): NuGet'te paket adı boş, GitHub'da aynı adı taşıyan kayda değer proje yok, `stickhand.app` ve `stickhand.dev` DNS'te boş.
+
+**Durum (14 Kasım 2026):** yeniden adlandırma uygulandı — depo `berkayelagoz/stickhand`, kod tarafındaki tüm satırlar (packId, exe, protokol, AppData, mutex/pipe, UI metinleri, proje dosyaları, namespace'ler) güncellendi; build + 148 test + tüm harness'ler geçti. Ayrıntı: PROGRESS.md günlüğü.
 
 **Sıra kritik:** isim değişikliği **ilk release'ten önce** yapılır. Kurulu kimse yokken `packId`, protokol şeması ve AppData klasörü bedava değişir; bir kurulum olduktan sonra `packId` değişikliği mevcut kurulumları güncellemesiz bırakır (Velopack yeni kimliği ayrı uygulama sayar).
 

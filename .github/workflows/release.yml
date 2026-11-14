@@ -124,10 +124,10 @@ jobs:
 
       - uses: actions/upload-artifact@v4
         with:
-          name: TinyHand-windows
+          name: StickHand-windows
           path: |
-            windows/dist/release/TinyHand-WindowsSetup.exe
-            windows/dist/release/TinyHand-Windows-portable.zip
+            windows/dist/release/StickHand-WindowsSetup.exe
+            windows/dist/release/StickHand-Windows-portable.zip
             windows/dist/release/*.sha256
             windows/dist/release/releases.win.json
             windows/dist/release/*.nupkg
@@ -139,10 +139,10 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           $assets = @(
-            "windows/dist/release/TinyHand-WindowsSetup.exe",
-            "windows/dist/release/TinyHand-WindowsSetup.exe.sha256",
-            "windows/dist/release/TinyHand-Windows-portable.zip",
-            "windows/dist/release/TinyHand-Windows-portable.zip.sha256",
+            "windows/dist/release/StickHand-WindowsSetup.exe",
+            "windows/dist/release/StickHand-WindowsSetup.exe.sha256",
+            "windows/dist/release/StickHand-Windows-portable.zip",
+            "windows/dist/release/StickHand-Windows-portable.zip.sha256",
             "windows/dist/release/releases.win.json"
           )
           $assets += Get-ChildItem "windows/dist/release/*.nupkg" | ForEach-Object { $_.FullName }
