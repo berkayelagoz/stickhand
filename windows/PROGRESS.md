@@ -115,7 +115,7 @@ Güncelleme kuralı: bir madde bitince `[x]` yapılır, tarih ve kısa not eklen
 ## M7 — Public repo sonrası final dokunuşlar — SÜRÜYOR (14 Kasım 2026)
 - [x] **M7.1 — Marka kalıntıları.** `SetAppUserModelId` → `com.berkayelagoz.stickhand`; `csproj` `Company` ve `velopack.json` `packAuthors` → `Berkay Elagöz`; `appicon.ico` kendi ikonumuzla değiştirildi (turuncu disk + üç parmak — tray ikonuyla aynı çizim; `windows/scripts/make-appicon.py` 16–256 px arası 7 boyut üretiyor). `LICENSE` değişmedi.
 - [x] **M7.2 — Güncelleme yüzeyi geri.** Tray "Check for updates…" + açılıştan 4 s sonra sessiz kontrol + balon, About düğmesi + durum satırı, README "updates itself" paragrafı ve tray tablosu satırı geri geldi. `AppHost.cs` ve `SettingsWindow.cs` M6 öncesi hâline döndü (`git checkout ac98d74 --`). Doğrulama: build 0 warning, 149/149, `--m5check` 32/32, `--m3check` PASS, `--inkcheck` 20/20, `--m4check` 71/71, e2e 10/10, cursorcheck 7/7.
-- [ ] M7.3 — Release dry-run (tag + gerçek feed)
+- [x] **M7.3 — Release dry-run.** `v1.1.0` ve `v1.1.1` tag'leri → `release.yml` uçtan uca (publish → `vpk pack` → `gh release create`). v1.1.0: 6 varlık; v1.1.1: delta dahil 8 varlık (`StickHand-1.1.1-delta.nupkg` 125 KB). Gerçek feed: kurulu 1.1.0 `--updatecheck` → `update 1.1.1 (114 MB, deltas=1, 1759 ms)` → `--apply` → %100 → `current\StickHand.dll` **1.1.1.0** → "no update" → `--uninstall` temiz. **Bulgu/düzeltme:** ilk deneme `release-windows.ps1`'de düştü — hiç release yokken `gh release list` `[]` döndürüyor, `@($null)` tek elemanlı dizi oluyor ve `Set-StrictMode -Version Latest` `$_.tagName`'de patlıyordu; liste artık savunmalı kuruluyor (fdd4fa7), tag yeni commit'e taşındı.
 - [ ] M7.4 — README görsel
 - [ ] M7.5 — docs/ alan adı kararı
 - [ ] M7.6 — Public hijyen

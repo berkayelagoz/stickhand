@@ -368,11 +368,13 @@ M6'da kaldırılan üç parça geri gelir; `Updater`, `--updatecheck`, `UpdatePr
 
 `release.yml`'in `gh release create` yolu **hiç denenmedi**; ilk gerçek release'ten önce burada sınanır.
 
-- [ ] `v1.1.0` annotated tag (`git tag -a v1.1.0 -m "…"`) → push → iş uçtan uca: publish → `vpk pack` → `gh release create`.
-- [ ] Release varlıkları: `StickHand-WindowsSetup.exe` (+ `.sha256`), `StickHand-Windows-portable.zip` (+ `.sha256`), `releases.win.json`, `StickHand-1.1.0-full.nupkg`.
-- [ ] Kurulum turu: setup `--silent` → kurulu `--updatecheck` gerçek feed'de "no update" (tek sürüm var) → `--uninstall` temiz.
-- [ ] İkinci tur: `VERSION` 1.1.1 + `v1.1.1` tag → kurulu 1.1.0 `--updatecheck` → `--apply` → `current\StickHand.dll` 1.1.1.0; delta paketi üretilmiş olmalı.
+- [x] `v1.1.0` annotated tag (`git tag -a v1.1.0 -m "…"`) → push → iş uçtan uca: publish → `vpk pack` → `gh release create`.
+- [x] Release varlıkları: `StickHand-WindowsSetup.exe` (+ `.sha256`), `StickHand-Windows-portable.zip` (+ `.sha256`), `releases.win.json`, `StickHand-1.1.0-full.nupkg`.
+- [x] Kurulum turu: setup `--silent` → kurulu `--updatecheck` gerçek feed'de "no update" (tek sürüm var) → `--uninstall` temiz.
+- [x] İkinci tur: `VERSION` 1.1.1 + `v1.1.1` tag → kurulu 1.1.0 `--updatecheck` → `--apply` → `current\StickHand.dll` 1.1.1.0; delta paketi üretilmiş olmalı.
 - **Çıkış:** iki release de varlıklarıyla açıldı; gerçek GitHub feed'inden güncelleme çalıştı (yerel `TH_UPDATE_SOURCE` değil).
+
+**Sonuç (14 Kasım 2026):** iki release de açıldı — `v1.1.0` (6 varlık) ve `v1.1.1` (delta dahil 8 varlık). Gerçek feed doğrulandı: kurulu 1.1.0 `--updatecheck` → `update 1.1.1 (114 MB, deltas=1, 1759 ms)` → `--apply` → %100 → `current\StickHand.dll` **1.1.1.0** → tekrar `--updatecheck` "no update" → `--uninstall` temiz. **Bulgu:** ilk release denemesi `release-windows.ps1`'de düştü — hiç release yokken `gh release list` `[]` döndürüyor, `@($null)` tek elemanlı dizi oluyor ve StrictMode `$_.tagName`'de patlıyordu; liste savunmalı kurulacak şekilde düzeltildi (fdd4fa7) ve tag yeni commit'e taşındı.
 
 #### M7.4 — README + görsel
 
