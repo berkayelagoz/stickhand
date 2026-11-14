@@ -980,6 +980,9 @@ public sealed class OverlayController : IDisposable
     /// <summary>Set the tap sound explicitly (toolbar, settings window, <c>sound/on|off</c>).</summary>
     public void SetSound(bool on)
     {
+        // The settings window can change the sound while it is already on: apply the choice
+        // before the early return, otherwise the tap keeps playing the startup sound.
+        _tapSound.Choice = Preferences.TapSound;
         if (Preferences.SoundOn == on) return;
         Preferences.SoundOn = on;
         _tapSound.Enabled = on;

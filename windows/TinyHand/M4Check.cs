@@ -43,6 +43,7 @@ internal static class M4Check
             CheckUrlCommands();
             CheckSingleInstance();
             CheckSettingsPersistence();
+            CheckTapSound();
             CheckHandMaker();
             CheckCustomHands();
             CheckWindows();
@@ -303,6 +304,34 @@ internal static class M4Check
             && Preferences.InkChoice == InkChoice.Match
             && Preferences.ToggleShortcut.Display == Hotkey.ToggleDefault.Display,
             $"{Preferences.FadeSeconds}/{Preferences.Style.Id}/{Preferences.InteractKey}");
+    }
+
+    // ------------------------------------------------------------------
+    // Tap sound choice
+    // ------------------------------------------------------------------
+
+    private static void CheckTapSound()
+    {
+        using var sound = new TapSound(TapSoundChoice.Thock);
+        sound.Warm();
+        Pump(600);
+        Check("tap sound opens the default voice", sound.VoicesChoice == TapSoundChoice.Thock,
+            $"{sound.VoicesChoice}");
+
+        sound.Choice = TapSoundChoice.Coin;
+        sound.Play();
+        Pump(600);
+        Check("tap sound follows the choice", sound.VoicesChoice == TapSoundChoice.Coin,
+            $"{sound.VoicesChoice}");
+
+        // The settings window changes the sound while it is already on: the controller must
+        // apply the preference even when SetSound's on/off state does not change.
+        using var controller = new OverlayController();
+        Preferences.TapSound = TapSoundChoice.Quack;
+        Preferences.SoundOn = true;
+        controller.SetSound(true);
+        Check("controller applies the tap sound", controller.TapSound.Choice == TapSoundChoice.Quack,
+            controller.TapSound.Choice.ToString());
     }
 
     // ------------------------------------------------------------------

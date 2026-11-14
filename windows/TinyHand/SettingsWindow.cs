@@ -705,7 +705,8 @@ internal sealed class SettingsWindow : Form
         };
         tiles.Controls.Add(SoundTile("Off", !Preferences.SoundOn, () =>
         {
-            Preferences.SoundOn = false;
+            // Let the controller own the preference: setting it here first made SetSound
+            // return early and left the tap sound enabled.
             _controller.SetSound(false);
             RefreshPage();
         }));
@@ -715,7 +716,6 @@ internal sealed class SettingsWindow : Form
             tiles.Controls.Add(SoundTile(choice.ToString(), Preferences.SoundOn && Preferences.TapSound == choice, () =>
             {
                 Preferences.TapSound = captured;
-                Preferences.SoundOn = true;
                 _controller.SetSound(true);
                 _preview.Choice = captured;
                 _preview.Enabled = true;

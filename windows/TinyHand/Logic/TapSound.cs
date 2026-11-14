@@ -56,6 +56,7 @@ public sealed class TapSound : IDisposable
     private readonly BlockingCollection<TapSoundChoice?> _queue = new();
     private readonly Thread _thread;
     private Voice[]? _voices;
+    private TapSoundChoice? _voicesChoice;
     private int _nextVoice;
     private volatile bool _enabled = true;
     private volatile TapSoundChoice _choice;
@@ -102,6 +103,10 @@ public sealed class TapSound : IDisposable
     /// <summary>True once the output device is open (harness/diagnostics).</summary>
     public bool Ready => _voices is not null;
 
+    /// <summary>Sound the open voice pool was built for (harness: proves a choice change
+    /// actually rebuilt the readers instead of replaying the first sound).</summary>
+    public TapSoundChoice? VoicesChoice => _voicesChoice;
+
     /// <summary>Open the output device ahead of the first tap so the first click is not late.</summary>
     public void Warm() => Enqueue(null);
 
@@ -128,7 +133,7 @@ public sealed class TapSound : IDisposable
             {
                 if (choice is null)
                 {
-                    EnsureVoices();
+                    EnsureVoices(_choice);
                     continue;
                 }
                 PlayNow(choice.Value);
@@ -143,8 +148,8 @@ public sealed class TapSound : IDisposable
     private void PlayNow(TapSoundChoice choice)
     {
         if (!_enabled) return;
-        if (!_data.TryGetValue(choice, out var bytes)) return;
-        if (!EnsureVoices()) return;
+        if (!_data.ContainsKey(choice)) return;
+        if (!EnsureVoices(choice)) return;
 
         var voices = _voices!;
         var voice = voices[_nextVoice % voices.Length];
@@ -162,23 +167,28 @@ public sealed class TapSound : IDisposable
         }
     }
 
-    private bool EnsureVoices()
+    /// <summary>Open (or rebuild) the voice pool for <paramref name="choice"/>. The readers
+    /// are bound to one WAV, so a different sound must rebuild them — the old code kept the
+    /// first choice's readers and every later tap replayed that sound.</summary>
+    private bool EnsureVoices(TapSoundChoice choice)
     {
         lock (_gate)
         {
-            if (_voices is not null) return true;
-            if (_data.Count == 0) return false;
+            if (_voices is not null && _voicesChoice == choice) return true;
+            DisposeVoicesLocked();
+            if (!_data.TryGetValue(choice, out var bytes)) return false;
             try
             {
                 var voices = new Voice[VoiceCount];
                 for (int i = 0; i < voices.Length; i++)
                 {
-                    var reader = new WaveFileReader(new MemoryStream(_data[_choice], writable: false));
+                    var reader = new WaveFileReader(new MemoryStream(bytes, writable: false));
                     var output = new WaveOutEvent { DesiredLatency = 120, NumberOfBuffers = 2 };
                     output.Init(reader);
                     voices[i] = new Voice { Output = output, Reader = reader };
                 }
                 _voices = voices;
+                _voicesChoice = choice;
                 return true;
             }
             catch (Exception ex)
@@ -191,12 +201,15 @@ public sealed class TapSound : IDisposable
 
     private void DisposeVoices()
     {
-        lock (_gate)
-        {
-            if (_voices is null) return;
-            foreach (var voice in _voices) voice.Dispose();
-            _voices = null;
-        }
+        lock (_gate) DisposeVoicesLocked();
+    }
+
+    private void DisposeVoicesLocked()
+    {
+        if (_voices is null) return;
+        foreach (var voice in _voices) voice.Dispose();
+        _voices = null;
+        _voicesChoice = null;
     }
 
     private static byte[]? LoadEmbedded(TapSoundChoice choice)
