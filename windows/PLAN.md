@@ -236,6 +236,30 @@ Sözleşme adları neden sabit:
 
 Özet: repo adını değiştirmek istersen değiştir, ürün adını değiştirmek marka kararıdır; ama `packId`, protokol şeması, AppData klasörü ve exe adı **aynı kalmalı**.
 
+#### İsim kararı (14 Kasım 2026): **StickHand**
+
+Ürün adı **StickHand** olur. Gerekçe: "el + değnek" görsel kimliğini korur (TinyHand ile aynı ailede okunur), kısa ve `stickhand://` / `%APPDATA%\StickHand` / `StickHand.exe` olarak temiz durur. Kontrol (14 Kasım 2026): NuGet'te paket adı boş, GitHub'da aynı adı taşıyan kayda değer proje yok, `stickhand.app` ve `stickhand.dev` DNS'te boş.
+
+**Sıra kritik:** isim değişikliği **ilk release'ten önce** yapılır. Kurulu kimse yokken `packId`, protokol şeması ve AppData klasörü bedava değişir; bir kurulum olduktan sonra `packId` değişikliği mevcut kurulumları güncellemesiz bırakır (Velopack yeni kimliği ayrı uygulama sayar).
+
+| Ne | Eski | Yeni |
+|---|---|---|
+| `packId` / `packTitle` (`installer/velopack.json`) | `TinyHand` | `StickHand` |
+| Setup / portable dosya adları | `TinyHand-WindowsSetup.exe`, `TinyHand-Windows-portable.zip` | `StickHand-WindowsSetup.exe`, `StickHand-Windows-portable.zip` |
+| `AssemblyName` (exe) | `TinyHand.exe` | `StickHand.exe` |
+| `Product` / `AssemblyTitle` (`csproj`) | `TinyHand` | `StickHand` |
+| Protokol şeması + HKCU anahtarı | `tinyhand://`, `Software\Classes\tinyhand` | `stickhand://`, `Software\Classes\stickhand` |
+| AppData klasörü | `%APPDATA%\TinyHand` | `%APPDATA%\StickHand` |
+| Mutex / pipe adları | `Local\TinyHand.SingleInstance`, `TinyHand.Command` | `Local\StickHand.SingleInstance`, `StickHand.Command` |
+| `Updater.RepositoryUrl` | `nilbuild/tinyhand` | yeni repo (`berkayelagoz/stickhand`) |
+| Tray / pencere / MessageBox metinleri | "TinyHand", "TinyHand Settings" | "StickHand", "StickHand Settings" |
+| README / PLAN / PROGRESS başlıkları | TinyHand | StickHand |
+| İkon | `windows/TinyHand/assets/appicon.ico` (upstream türevi olabilir) | kendi ikonu |
+
+**Değişmeyenler:** `LICENSE` (Kamran Ahmed satırı kalır — assetler onun), `assets/hand_*.png` + `assets/sounds/` (onun eseri), namespace'ler (`TinyHand.Logic`, `TinyHand.Interop` — kullanıcı görmez, 30 dosyada geçer, dokunulmaz), davranış sözleşmeleri (state.json şeması, URL grameri, 36 stil + lazer, 15 ses, mürekkep rengi, fade).
+
+**Not:** `state.json`'ın *şeması* ve URL *grameri* aynı kalır; yalnız şema adı (`tinyhand://` → `stickhand://`) ve dosya yolu değişir. macOS ile ortaklık M6'da bittiği için bu kırılma kabul edilir. İsim değişikliğiyle birlikte "upstream'den yayınlama" seçeneği de düşer: yayın kendi deposundan (`berkayelagoz/stickhand`) yapılır.
+
 #### Silinecekler
 
 | Yol | Ne |
@@ -296,4 +320,4 @@ Sözleşme adları neden sabit:
 3. Çözüldü (macOS referansı izlenir): çift Shift click-through modunda TinyHand eli görünür kalır, gerçek imleç gizli. M1 prototipinde Windows tarafında doğrulanır.
 4. Karar: Hedef işletim sistemi yalnızca **Windows 11 x64**; Windows 10 desteklenmez ve test edilmez. Sonuç: .NET 10 destek listesindeki Windows 10 edisyon ayrıntıları takip edilmez; gereksinim ve dağıtım metinleri tek hedefle yazılır.
 5. Interact tuşu (M3): varsayılan **Alt** (macOS ⌥ karşılığı). Windows'ta tek başına Alt tap'i alttaki uygulamanın menü çubuğunu vurgular; modifier'ı yutmak sistem tuş durumunu kilitlediği için bu davranış kabul edilir ve M4 ayarlarından tuş değiştirilebilir (Ctrl / Shift / kapalı) *(M4'te uygulandı: Ayarlar → General → Hold to use the app)*.
-6. M6 (Windows-only depo): yayın hangi depodan yapılacak — `berkayelagoz/tinyhand` (fork) mi, `nilbuild/tinyhand` (upstream) mi? Seçime göre `Updater.RepositoryUrl`, README indirme linkleri ve `docs/` güncellenir; upstream seçilirse o repoda yazma yetkisi gerekir.
+6. Çözüldü (14 Kasım 2026): ürün adı **StickHand** olur ve yayın kendi deposundan yapılır (`berkayelagoz/stickhand`). İsim değişikliği upstream adını kullanmayı bıraktığı için "upstream'den yayınlama" seçeneği düştü; `Updater.RepositoryUrl`, README linkleri ve `docs/` yeni ada göre güncellenir. Ayrıntı: M6 → "İsim kararı".
