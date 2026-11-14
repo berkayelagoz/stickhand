@@ -307,7 +307,9 @@ Sözleşme adları neden sabit:
 5. **`windows/PLAN.md` / `windows/PROGRESS.md`** — başa tek satır not: "macOS uygulaması M6'da çıkarıldı; aşağıdaki macOS referansları tarihsel kayıttır, davranış sözleşmeleri (state.json, URL grameri, stil kümesi, ses seti, mürekkep rengi) hâlâ geçerlidir." M1–M5 kayıtları silinmez (geçmiş).
 6. **`docs/`** (tinyhand.app sitesi) — ayrı karar: kalabilir (indirme linkleri Windows'a çevrilir) veya çıkarılır. Windows portuyla ilgisi yok, build'i etkilemez.
 
-#### Private repo kararı (14 Kasım 2026)
+#### Private repo kararı (14 Kasım 2026) — GERİ ALINDI (14 Kasım 2026)
+
+> **Geri alındı:** depo 14 Kasım 2026'da **public** yapıldı. Aşağıdaki karar ve ondan doğan güncelleme yüzeyi sadeleştirmesi tarihseldir; geri alma işi M7.2'de planlandı.
 
 Depo **şimdilik private kalacak**. Sonucu: Velopack `GithubSource` token'sız çalıştığı için private repodaki release'leri okuyamaz → **öz-güncelleme çalışmaz**; "Check for updates" sessizce "güncelleme yok" der (hata vermez, bu yüzden fark edilmesi zordur).
 
@@ -334,9 +336,61 @@ Depo public yapılırsa: tray öğesi, About düğmesi ve `AppHost`'taki ince ba
 - Fork upstream'den ayrışır; upstream'den gelen değişiklikleri almak artık elle merge demektir (beklenen sonuç).
 - `windows/PLAN.md`'deki "ortak davranış sözleşmeleri" bölümü macOS referansına dayanıyor; macOS kodu gittikten sonra bu sözleşmeler **spesifikasyon** olarak kalır (state.json, URL grameri, 36 stil + lazer, 15 ses, mürekkep rengi, fade). Silinmez.
 - Asset lisansı: PNG/WAV'lar MIT kapsamında kalır; `LICENSE` iki satırıyla korunur. Yeni asset üretilirse bu not güncellenir.
-- **Repo private (14 Kasım 2026 kararı):** `berkayelagoz/stickhand` private kalıyor. Velopack `GithubSource` token'sız çalıştığı için private repoda release'leri okuyamaz → öz-güncelleme yok; güncelleme yüzeyi M6'da kaldırıldı (bkz. "Private repo kararı"). Public'e geçilirse güncelleme yüzeyi geri eklenir. Uygulamaya token gömmek alternatif değildir: token herkese dağıtılır.
+- **Repo public (14 Kasım 2026):** `berkayelagoz/stickhand` public yapıldı; Velopack `GithubSource` artık release'leri okuyabilir. M6'da kaldırılan güncelleme yüzeyi M7.2'de geri eklenir — o bitene kadar kurulu build'ler güncelleme göremez. Uygulamaya token gömmek yine alternatif değildir.
 - **Sıra:** repo adı → yerel `git remote set-url` → kod rename'i (yukarıdaki tablo) → ilk release. Kod, repo'nun yeni adresini gösterdiği anda repo o adreste olmalı.
 - Fork ise: ad değişse de "forked from nilbuild/tinyhand" etiketi kalır; kendi ürünü olacaksa Settings → Leave fork network ile ayrılır (geri alınamaz).
+
+### M7 — Public repo sonrası final dokunuşlar — PLANLANDI
+
+**Durum (14 Kasım 2026):** depo **public** yapıldı. Bu, M6'nın "private repo" kararını tersine çeviriyor: Velopack `GithubSource` artık release'leri okuyabilir, yani öz-güncelleme **çalışabilir** — ama M6'da güncelleme yüzeyi kaldırıldığı için kullanıcı güncellemeyi göremez. README ("This build does not update itself…") ve About ("This build does not check for updates…") metinleri de artık yanlış. M7 bu açığı kapatır ve ilk public release'i güvenli hale getirir.
+
+**Sıra bağımlı.** M7.1 ve M7.2, M7.3'ten (ilk tag) **önce** bitmeli; yoksa public'e upstream markalı ve güncellemesiz bir sürüm çıkar. M7.4–M7.6 acele değil.
+
+#### M7.1 — Marka kalıntıları (mekanik, release'ten önce)
+
+- [x] `Program.cs` `SetAppUserModelId("com.kamranahmed.tinyhand")` → kendi AUMID'i (öneri: `com.berkayelagoz.stickhand`). AUMID taskbar gruplaması/pinleme kimliğidir; public kurulum yokken değiştirmek bedava, kurulumlar başladıktan sonra mevcut pinleri böler.
+- [x] `StickHand.csproj` `<Company>Kamran Ahmed</Company>` → `Berkay Elagöz` (exe'nin dosya özelliklerinde görünür).
+- [x] `installer/velopack.json` `packAuthors` → `Berkay Elagöz` (kurulum sihirbazında görünür).
+- [x] `windows/StickHand/assets/appicon.ico` → kendi ikonu. PLAN'ın isim tablosunda "upstream türevi olabilir" notu var; public'te upstream ikonunu kullanmak marka riski.
+- [x] `LICENSE` **değişmez** — assetler (36 PNG + 15 WAV) Kamran Ahmed'in, telif satırı kalır.
+- **Çıkış:** build 0 warning, 149/149 test, `--m5check` 32/32; paketlenmiş exe'nin `Company` alanı `Berkay Elagöz`, kurulum sihirbazının yazarı aynı.
+
+#### M7.2 — Güncelleme yüzeyini geri koy
+
+M6'da kaldırılan üç parça geri gelir; `Updater`, `--updatecheck`, `UpdateProgressForm` ve `VelopackApp` kancaları zaten yerinde. Referans: `git show ed0b023^:windows/StickHand/AppHost.cs`.
+
+- [x] Tray menüsüne **"Check for updates…"** öğesi + açılıştan 4 s sonra sessiz arka plan kontrolü + güncelleme varsa balon (M5 davranışı).
+- [x] Ayarlar → About: **"Check for updates…"** düğmesi + durum satırı; M6'da konan "This build does not check for updates…" notu kaldırılır.
+- [x] `README.md`: "This build does not update itself…" paragrafı "updates itself from the same release feed" olur; tray tablosundaki menü satırı geri gelir.
+- **Çıkış:** `--m5check` güncelleme yüzeyi kontrolleri geçer; kurulu build `--updatecheck` ile gerçek feed'e çıkar ve hata vermez.
+
+#### M7.3 — Release dry-run (public, duyurusuz)
+
+`release.yml`'in `gh release create` yolu **hiç denenmedi**; ilk gerçek release'ten önce burada sınanır.
+
+- [ ] `v1.1.0` annotated tag (`git tag -a v1.1.0 -m "…"`) → push → iş uçtan uca: publish → `vpk pack` → `gh release create`.
+- [ ] Release varlıkları: `StickHand-WindowsSetup.exe` (+ `.sha256`), `StickHand-Windows-portable.zip` (+ `.sha256`), `releases.win.json`, `StickHand-1.1.0-full.nupkg`.
+- [ ] Kurulum turu: setup `--silent` → kurulu `--updatecheck` gerçek feed'de "no update" (tek sürüm var) → `--uninstall` temiz.
+- [ ] İkinci tur: `VERSION` 1.1.1 + `v1.1.1` tag → kurulu 1.1.0 `--updatecheck` → `--apply` → `current\StickHand.dll` 1.1.1.0; delta paketi üretilmiş olmalı.
+- **Çıkış:** iki release de varlıklarıyla açıldı; gerçek GitHub feed'inden güncelleme çalıştı (yerel `TH_UPDATE_SOURCE` değil).
+
+#### M7.4 — README + görsel
+
+- [ ] Uygulamanın kendi ekran görüntüsü/GIF'i (el + mürekkep + toolbar); `docs/assets/` altına, README'nin üstüne. Public repo'da dönüşümü en çok etkileyen tek şey.
+- [ ] Kurulum bölümü ve kısayol tablosu gözden geçirilir; "private" referansı kalmaz.
+- **Çıkış:** README public repo için tam; SmartScreen notu ve `stickhand://` otomasyonu doğru.
+
+#### M7.5 — docs/ alan adı kararı
+
+- [ ] `docs/index.html` canonical/og URL'leri hâlâ `tinyhand.app`. Site yayınlanacaksa alan adı belirlenir; yayınlanmayacaksa `docs/` çıkarılır.
+- **Çıkış:** karar + uygulama.
+
+#### M7.6 — Public hijyen
+
+- [ ] Secret taraması (GitHub secret scanning / push protection; public'te ücretsiz).
+- [ ] `main` branch protection: PR zorunlu, force-push kapalı.
+- [ ] Issue/PR şablonları (opsiyonel).
+- **Çıkış:** `main`'e doğrudan push kapalı, açık secret uyarısı yok.
 
 ## Açık kararlar (kullanıcı)
 

@@ -15,11 +15,9 @@ Windows 11 x64.
 ## Install
 
 Download `StickHand-WindowsSetup.exe` and run it. It installs per-user (no administrator
-rights). `StickHand-Windows-portable.zip` is the unpacked build for people who would rather
-not install anything.
-
-This build does not update itself: the repository is private, so the updater cannot read its
-releases. To upgrade, download a newer setup and run it over the installed copy.
+rights) and updates itself from the same release feed. `StickHand-Windows-portable.zip` is
+the unpacked build for people who would rather not install anything; it does not update
+itself.
 
 The installer is not code-signed, so SmartScreen shows **Windows protected your PC** the
 first time: choose **More info → Run anyway**. Some antivirus products flag the global
@@ -30,7 +28,7 @@ mouse and keyboard hooks StickHand needs — those hooks are what turn your clic
 | | |
 |---|---|
 | Click the tray icon, or **Ctrl+Alt+H** | Turn the pointer on or off |
-| Right-click the tray icon | Menu, Settings, Welcome |
+| Right-click the tray icon | Menu, Settings, Check for updates |
 | Click | Tap (nothing underneath gets clicked) |
 | Hold and drag | Draw on the screen |
 | Hold **Ctrl** while drawing | Add an arrowhead to the end of the line |

@@ -20,7 +20,7 @@ internal static class Program
         // exit. A dev build (not installed) falls straight through.
         VelopackApp.Build()
             .SetAutoApplyOnStartup(true)
-            .SetAppUserModelId("com.kamranahmed.tinyhand")
+            .SetAppUserModelId("com.berkayelagoz.stickhand")
             .Run();
 
         if (args.Contains("--spike"))

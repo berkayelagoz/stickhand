@@ -20,7 +20,7 @@
     <Version>$(StickHandVersion)</Version>
     <Product>StickHand</Product>
     <AssemblyTitle>StickHand</AssemblyTitle>
-    <Company>Kamran Ahmed</Company>
+    <Company>Berkay Elagöz</Company>
   </PropertyGroup>
 
   <ItemGroup>

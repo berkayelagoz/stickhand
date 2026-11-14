@@ -112,6 +112,14 @@ Güncelleme kuralı: bir madde bitince `[x]` yapılır, tarih ve kısa not eklen
 - [x] **Sözleşme testleri.** `M5Tests.ReleaseWorkflow_AddsTheWindowsAssetsToTheSameRelease` → `ReleaseWorkflow_OpensTheReleaseWithTheWindowsAssets` (artık `needs: release` **yok**, `gh release create` var); yeni `Workflows_AreWindowsOnly` (iki workflow'da `macos-latest`/`swift` yok, `windows-latest` var).
 - **Çıkış kriteri (karşılandı, 14 Kasım 2026):** build + **149/149** test; `--m5check` **32/32**, `--m3check` PASS, `--inkcheck` 20/20, `--m4check` 71/71, e2e-m1 10/10, cursorcheck 7/7; `release-windows.ps1` tam varlık seti (`StickHand-WindowsSetup.exe` + `.sha256`, `StickHand-Windows-portable.zip` + `.sha256`, `releases.win.json`, `StickHand-1.1.0-full.nupkg`; portable zip'te `current/LICENSE.txt`); kurulum turu: `--silent` → `%LOCALAPPDATA%\StickHand` → kurulu `--updatecheck` (`installed=True channel=win`, "no update (560 ms)") → `--uninstall` sonrası kısayol/registry/dizin temiz. CI: PR #1'de `build-windows` **yeşil** (build + test + publish). `--apply` yerel feed ile koşuldu (`TH_UPDATE_SOURCE`): 1.1.0 → 1.1.1 (delta=1), `current\StickHand.dll` 1.1.1.0. Tag push'u (release işi) henüz denenmedi.
 
+## M7 — Public repo sonrası final dokunuşlar — SÜRÜYOR (14 Kasım 2026)
+- [x] **M7.1 — Marka kalıntıları.** `SetAppUserModelId` → `com.berkayelagoz.stickhand`; `csproj` `Company` ve `velopack.json` `packAuthors` → `Berkay Elagöz`; `appicon.ico` kendi ikonumuzla değiştirildi (turuncu disk + üç parmak — tray ikonuyla aynı çizim; `windows/scripts/make-appicon.py` 16–256 px arası 7 boyut üretiyor). `LICENSE` değişmedi.
+- [x] **M7.2 — Güncelleme yüzeyi geri.** Tray "Check for updates…" + açılıştan 4 s sonra sessiz kontrol + balon, About düğmesi + durum satırı, README "updates itself" paragrafı ve tray tablosu satırı geri geldi. `AppHost.cs` ve `SettingsWindow.cs` M6 öncesi hâline döndü (`git checkout ac98d74 --`). Doğrulama: build 0 warning, 149/149, `--m5check` 32/32, `--m3check` PASS, `--inkcheck` 20/20, `--m4check` 71/71, e2e 10/10, cursorcheck 7/7.
+- [ ] M7.3 — Release dry-run (tag + gerçek feed)
+- [ ] M7.4 — README görsel
+- [ ] M7.5 — docs/ alan adı kararı
+- [ ] M7.6 — Public hijyen
+
 ## Açık kararlar
 - [x] Ok ucu tuşu: **Ctrl** onaylandı (14 Kasım 2026 — kullanıcı: "ok ucu düzgün çalışıyor")
 - [x] Çift Shift'te imleç: macOS referansı — el görünür kalır, gerçek imleç gizli (M1 prototipinde Windows tarafında uygulandı: `SetSystemCursor` yolu)

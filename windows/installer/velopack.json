@@ -1,7 +1,7 @@
 {
   "packId": "StickHand",
   "packTitle": "StickHand",
-  "packAuthors": "Kamran Ahmed",
+  "packAuthors": "Berkay Elagöz",
   "channel": "win",
   "mainExe": "StickHand.exe",
   "runtime": "win-x64",
