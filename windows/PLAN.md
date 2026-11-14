@@ -325,8 +325,8 @@ Depo public yapılırsa: tray öğesi, About düğmesi ve `AppHost`'taki ince ba
 - [x] `--m5check` **32/32**, `--m3check` PASS, `--inkcheck` 20/20, `--m4check` 71/71, e2e-m1 10/10, cursorcheck 7/7.
 - [x] `powershell -File windows/scripts/release-windows.ps1` tam varlık setini üretir: `StickHand-WindowsSetup.exe` (+ `.sha256`), `StickHand-Windows-portable.zip` (+ `.sha256`), `releases.win.json`, `StickHand-1.1.0-full.nupkg`; portable zip içinde `current/LICENSE.txt` var. Delta paketi yok — `-FetchPrevious` verilmedi (yerel turda önceki release indirilmez).
 - [x] `grep -ri "swift\|Package.swift\|Sources/TinyHand"` yalnızca tarihsel PLAN notlarını, üç görsel sözleşme yorumunu (`Ink.swift` / `Toolbar.swift` atıfları) ve yeni testin "swift yok" iddiasını döndürür; CI/README/build referansı kalmadı.
-- [ ] CI: PR'da `build-windows` yeşil; `v*` tag push'unda tek iş release'i açar ve Windows varlıklarını yükler. *(Yerelde koşulamaz: YAML geçerliliği ve iş yapısı doğrulandı — tek iş, `needs`/`if` yok, `gh release create`; ilk tag push'unda görülecek.)*
-- [x] Kurulum turu: `--silent` kurulum → `%LOCALAPPDATA%\StickHand` (kısayollar + kaldırma kaydı) → kurulu `--updatecheck` → `--uninstall` sonrası kısayol/registry/dizin temiz. `--apply` çalıştırılamadı: feed'de daha yeni bir release yok (private repo, bu branch'ten yayın çıkmadı).
+- [x] CI: PR #1'de `build-windows` **yeşil** (build + test + self-contained publish; 14 Kasım 2026). Tag push'u henüz denenmedi — release işi ilk `v*` tag'inde görülecek. **Bulgu:** çıplak `pull_request` anahtarı yüzünden workflow **geçersizdi**; `only_windows`'a yapılan önceki push'lar 0 job'la düşüyordu (run adı `.github/workflows/build.yml` olarak görünüyordu). Düzeltme CI'ı yeniden çalışır hale getirdi.
+- [x] Kurulum turu: `--silent` kurulum → `%LOCALAPPDATA%\StickHand` (kısayollar + kaldırma kaydı) → kurulu `--updatecheck` → `--uninstall` sonrası kısayol/registry/dizin temiz. `--apply` yerel feed ile koşuldu (`TH_UPDATE_SOURCE`): 1.1.0 → `update 1.1.1 (114 MB, deltas=1)` → indirme %70/%100 → `current\StickHand.dll` **1.1.1.0**. Gerçek GitHub feed'i denenmedi (private repo, yayın yok).
 
 #### Notlar / riskler
 
