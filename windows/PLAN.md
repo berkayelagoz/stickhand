@@ -312,6 +312,9 @@ Sözleşme adları neden sabit:
 - Fork upstream'den ayrışır; upstream'den gelen değişiklikleri almak artık elle merge demektir (beklenen sonuç).
 - `windows/PLAN.md`'deki "ortak davranış sözleşmeleri" bölümü macOS referansına dayanıyor; macOS kodu gittikten sonra bu sözleşmeler **spesifikasyon** olarak kalır (state.json, URL grameri, 36 stil + lazer, 15 ses, mürekkep rengi, fade). Silinmez.
 - Asset lisansı: PNG/WAV'lar MIT kapsamında kalır; `LICENSE` iki satırıyla korunur. Yeni asset üretilirse bu not güncellenir.
+- **Repo public olmalı (14 Kasım 2026 tespiti):** `berkayelagoz/tinyhand` şu an **private** (API 404). Velopack `GithubSource` token'sız çalıştığı için private repoda release'leri okuyamaz → "Check for updates" sessizce "güncelleme yok" der. İlk release'ten önce repo public yapılır (Settings → General → Change visibility). Uygulamaya token gömmek alternatif değildir: token herkese dağıtılır.
+- **Sıra:** repo adı → yerel `git remote set-url` → kod rename'i (yukarıdaki tablo) → ilk release. Kod, repo'nun yeni adresini gösterdiği anda repo o adreste olmalı.
+- Fork ise: ad değişse de "forked from nilbuild/tinyhand" etiketi kalır; kendi ürünü olacaksa Settings → Leave fork network ile ayrılır (geri alınamaz).
 
 ## Açık kararlar (kullanıcı)
 
