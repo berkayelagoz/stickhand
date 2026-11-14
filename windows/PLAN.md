@@ -1,0 +1,348 @@
+# StickHand — Windows Planı
+
+> **M6 (14 Kasım 2026):** macOS uygulaması depodan çıkarıldı; aşağıdaki macOS referansları tarihsel kayıttır. Davranış sözleşmeleri (state.json şeması, URL grameri, 36 stil + lazer, 15 ses, mürekkep rengi, fade) hâlâ geçerlidir.
+
+> **Ad değişikliği (14 Kasım 2026):** ürünün adı **StickHand** oldu; depo `berkayelagoz/stickhand`. Aşağıdaki M1–M5 kayıtları "TinyHand" adıyla yazıldığı için tarihseldir — davranış sözleşmeleri (state.json şeması, URL grameri, 36 stil + lazer, 15 ses, mürekkep rengi, fade) hâlâ geçerlidir. Yeniden adlandırma tablosu: M6 → "İsim kararı".
+
+Kaynak: macOS uygulaması (`Sources/TinyHand/`, Swift/AppKit). Hedef: özellik eşliği, tek depoda iki ayrı uygulama. Kod tabanı paylaşılmaz; eşliği garanti eden ortak davranış sözleşmeleri ve varlıklar (aşağıda ayrı bölüm).
+
+## Kararlaştırılmış teknoloji
+
+| Katman | Seçim |
+|---|---|
+| Dil / runtime | C# / .NET 10 (LTS; .NET 8 desteği 10 Kasım 2026'da sona erdi). SDK sürümü `global.json` ile sabitlenir; CI'da açıkça kurulur |
+| Ana süreç, tray, ayarlar | WinForms (`NotifyIcon` + mesaj pompası) |
+| Overlay (monitör başına) | Ham Win32: `WS_EX_NOREDIRECTIONBITMAP \| WS_EX_NOACTIVATE \| WS_EX_TOPMOST` + DirectComposition target/visual (M1 prototipi: `WS_EX_LAYERED` layered window; geçiş M1.5'te) |
+| Overlay çizim | Direct2D (D3D11) → DXGI flip-model swap chain → DirectComposition; kompozisyon timer'ı (busy hedef monitör yenilemesi, idle 20 Hz). M1 prototipi: GDI+ → `UpdateLayeredWindow` (M1.5'te değişir) |
+| Girdi yakalama | P/Invoke: `WH_MOUSE_LL`, `WH_KEYBOARD_LL` (`SetWindowsHookEx`); hook'lar tray/overlay pompasından izole, kendi mesaj döngüsü olan ayrı iş parçacığında |
+| İmleç gizleme | `WM_SETCURSOR` + boş imleç; `Cursor = None` tek başına tasarım kararı değil (bkz. eşleme tablosu ve M1) |
+| Global kısayollar | `RegisterHotKey` (Ctrl+Alt+H, Ctrl+Alt+X); Esc hook'tan |
+| Otomasyon | `tinyhand://` protokolü (HKCU `Software\Classes`), tek-instance named pipe, `%APPDATA%\TinyHand\state.json` |
+| Ses | NAudio |
+| Kurulum / öz-güncelleme | Velopack (delta güncelleme dosyaları dahil); kanal `win`, feed `releases.win.json`, varlıklar `TinyHand-WindowsSetup.exe` + `TinyHand-Windows-portable.zip` + `.nupkg` |
+| CI | `windows-latest` işi: `dotnet publish -r win-x64 --self-contained` + Velopack bundle; Windows varlıkları macOS işinin zaten oluşturduğu GitHub Release'e aynı yayın adımında eklenir |
+
+Elenen alternatifler: WPF overlay (`AllowsTransparency` + fullscreen topmost + 120 Hz yavaş), Rust (geliştirme hızı), WinUI/Tauri (interop yükü, kazanım yok), GDI+ → ULW/ULWI sunumu (M1'in derin ölçümleriyle elendi — present DWM redirection senkronunda değişken bloklanıyor; bkz. spike bölümü sonuç notu ve M1.5).
+
+## M1 öncesi netleşecek karar: tıklama yönlendirme ve imleç görünürlüğü
+
+M1'in asıl sınaması, el çizilmesiyle birlikte gerçek imlecin, tıklamanın ve pencere odağının doğru yönetilmesi. Prototipten şu kuralların çıkması gerekir:
+
+| Etkileşim | Tıklama nereye gider | Gerçek imleç |
+|---|---|---|
+| Çizim (overlay aktif) | Hook yutar; alttaki uygulama almaz | Gizli |
+| Toolbar bölgesi | Hook yutar; komut hook içinden overlay'e iletilir — yutulan olay overlay'e pencere mesajı olarak gelmez | Gizli |
+| Çift Shift click-through | Hook yutmaz; alttaki uygulama alır | macOS referansı: gizli — TinyHand eli görünür kalır; M1 prototipinde doğrulanır |
+| Interact tuşu basılıyken geçici click-through (M3'te uygulandı) | Hook yutmaz; alttaki uygulama alır | `interactKeepsHand` ayarına bağlı: false (macOS varsayılanı) ise gerçek imleç görünür, el gizlenir; true ise el kalır |
+| Esc / kapatma | Normal davranış | Geri döner |
+
+Layered window'da alfa değeri 0 olan pikseller hit-test'i alttaki pencereye geçirir; bu yüzden gizleme (imleç) ve geçirme (hit-test) ayrı şeylerdir ve M1 prototipinde birlikte doğrulanır. Click-through modunda hook'un tıklamayı bırakması tek başına yeterli değil: hit-test, elin **opak** piksellerini de overlay'e yönlendirebilir. Geçiş pencere stili düzeyinde yönetilmelidir (ör. `WS_EX_TRANSPARENT`); hangi yöntemin opak alanı da geçirdiği M1 prototipinde ölçülür, varsayım sayılmaz. Fare basılıyken mod değişirse down ve up olaylarının farklı pencerelere gitmediği de aynı prototipte doğrulanır.
+
+## Bileşen eşlemesi (macOS → Windows)
+
+| macOS | Windows | Not |
+|---|---|---|
+| `InputTap` (CGEventTap) | `WH_MOUSE_LL`/`WH_KEYBOARD_LL` | Yutma: hook'tan `1`. `LLMHF_INJECTED` yalnızca kendi olaylarında set olmaz — başka süreçlerin enjekte ettiği olaylarda da set olur; bu yüzden TinyHand'in `SendInput` ile enjekte ettiği olaylar `dwExtraInfo` imzasıyla ayıklanır, yoksa döngü. `maxWaitMs` kaynakla aynı anlamda korunur: olayın kaynaktan hook'a ulaşma gecikmesi (kaynaktaki ~300 ms varsayımı taşınmaz); hook callback süresi ayrı ölçülür. `LowLevelHooksTimeout` aşımında Windows hook'u bildirim vermeden kaldırır; M1'de aç/kapat sonrası yeniden kurulum doğrulanır, otomatik kurtarma M1 kapsamı dışıdır. Accessibility izni gerekmez |
+| `CursorHider` (private CGS) | `WM_SETCURSOR` + boş imleç | Hook bir olayı yuttuğunda overlay o olayı pencere mesajı olarak almaz; layered window'un alfa 0 alanları hit-test'i alttaki pencereye geçirir. `Cursor = None` tek başına yeterli değil; imleç gizleme + click-through M1 prototipinde birlikte doğrulanır |
+| `OverlayController` (NSWindow) | Layered window, monitör başına | `Screen.AllScreens` |
+| `HotKeyCenter` (Carbon) | `RegisterHotKey` | |
+| `Ink` (CAShapeLayer) | Direct2D vektör çizim (M1 prototipi GDI+), fade animasyonu timer'ı | Gölge: önceden blur'lanmış sprite (gerçek zamanlı blurdan kaçınılır) |
+| ⌘ basılı ok ucu | Ctrl (Windows tuşu Start menüsünü açar) | Onaylandı (14 Kasım 2026) |
+| Çift Shift click-through | LL keyboard hook, aynı mantık | İlk doğrulama M1 prototipinde |
+| `interactKey` basılıyken geçici click-through (macOS varsayılan ⌥) | Aynı mantık, ayarlanabilir tuş (varsayılan Alt) | `interactKeepsHand` ayarı: true ise el kalır, false (varsayılan) ise gerçek imleç görünür. Davranış M3, ayarı M4. Windows'ta modifier **yutulmaz** (keyup'ı yutmak sistem tuş durumunu kilitler); tek başına Alt tap'i alttaki uygulamanın menü çubuğunu vurgular — belgelenmiş davranış |
+| NSStatusItem | `NotifyIcon` + `ContextMenuStrip` | Açık/koyu taskbar için registry teması |
+| `Toolbar` | Overlay içine çizili + hit-test bölgesi | `passThroughRects` mantığı korunur |
+| `Automation` | Protokol kaydı + named pipe + state.json | Protokol ikinci instance doğurur → mutex + komut iletme. Davranış sözleşmesi: state.json styles listesini yayımlar, `style/<id>` overlay'i açar, normal çıkışta dosya silinir |
+| Sparkle `Updater` | Velopack (delta dahil) | |
+| `HandMaker` | C# portu gerekli | Prompt şablonu platform-bağımsız; PNG doğrulama + işleme (compose, mürekkep rengi çıkarımı) ImageIO/CoreGraphics ile yapıldığından Windows'a taşınacak iş var. Kurallar birebir taşınır (bkz. sözleşmeler bölümü) |
+
+## Windows'a özgü tuzaklar
+
+1. **DPI**: per-monitor v2 aware manifest; el/mürekkep ölçeği monitör DPI'sına göre çarpılır. En hızlı hata kaynağı. Farklı DPI'lı iki monitörde geçiş ve ekran kilidi (Win+L) M1 test matrisinde doğrulanır.
+2. **UAC / yükseltilmiş pencereler**: overlay üstlerinde çizemez. Tüm aşamalarda belgelenmiş sınırlama olarak kabul edilir. `uiAccess="true"` imzalı ikili + Program Files gerektireceği için imzasız dağıtım kararıyla çelişir; plandan çıkarıldı.
+3. **Antivirüs / SmartScreen**: global hook AV heuristiği tetikleyebilir. Karar gereği sertifika alınmıyor; SmartScreen uyarısı kullanıcıya belgelenir, AV false positive riski kabul edilir.
+4. **Hook gecikmesi ve sessiz kaldırma**: hook callback'i birkaç ms'nin altında tutulur ve ayrıca ölçülür (kaynağa ulaşma gecikmesinden farklı metrik). Hook'lar kendi mesaj döngülü ayrı iş parçacığında çalışır. `LowLevelHooksTimeout` aşımında Windows hook'u bildirim vermeden kaldırır; uygulamaya bildirim mekanizması yoktur. M1'de doğrulanan set: ayrı mesaj döngüsü çalışıyor, callback süresi ölçülüyor, kapatıp açınca hook'lar yeniden kuruluyor. Otomatik kurtarma (ör. `SendInput` ile periyodik kontrol) M1 kapsamı dışıdır; ileride gerek görülürse ayrı değerlendirilir.
+5. **Görev çubuğu**: overlay penceresine `WS_EX_TOOLWINDOW`.
+6. **Çok monitör**: el yalnız imlecin bulunduğu monitörde çizilir ve kol o ekranın alt kenarından uzanır (`HandScene.DrawsPointerOn`, `OverlayController.CursorMonitor`). Her monitörde çizmek, imleç komşu ekrandayken birincil ekranda ikinci bir kol bırakıyordu (M5). Mutlak `SendInput` koordinatları varsayılan olarak yalnız birincil monitöre eşlenir; test enjeksiyonu `MOUSEEVENTF_VIRTUALDESK` kullanmalıdır.
+7. **DPI ölçeği tamsayıdır**: `round(dpi/96)` (M1 kararı). %150 → 2; el boyu ekran yüksekliğine bağlı olduğu için fiziksel boy değişmez, toolbar/HUD/mürekkep minimumu büyür. Kesirli ölçek ayrı bir iş olarak duruyor.
+
+## Ortak davranış sözleşmeleri (tek depo, iki uygulama)
+
+Swift/AppKit ve C#/WinForms aynı depoda iki ayrı uygulamadır; kod paylaşımı yok. Eşliği garanti eden sözleşmeler, iki tarafta birebir aynı olmalı:
+
+- **state.json** (macOS: `~/Library/Application Support/TinyHand/` — Windows: `%APPDATA%\TinyHand\`): pid, aktiflik, seçili stil, ses **ve styles listesi** (custom eller dahil, değişince yeniden yazılır). `style/<id>` komutu overlay'i açar; **normal çıkışta dosya silinir**.
+- **URL komut grameri**: `tinyhand://on | off | toggle | clear | style/<id> | sound/<arg>`; aynı komut seti, aynı bilinmeyen komut davranışı.
+- **Stil kümesi**: 36 yerleşik stil + laser + custom PNG eller; aynı id'ler ve sıra (toolbar her iki tarafta aynı el kümesini gösterir). Yerleşik asset PNG'ler (macOS `assets/hand_*.png`) **el + sap compose'ı içerir** — el, hafif eğik uzun bir sap/stem ile tutulur (kullanıcı görsel referansı, 13 Kasım); aynı PNG'ler Windows tarafına gömülür, sap görünümü ek iş gerektirmez.
+- **HandMaker çıktı sözleşmesi**: aynı prompt şablonu; PNG doğrulaması aynı kurallarla (şeffaf arka plan zorunlu, portre kare, parmak ucu en yüksek nokta, tam el görünür); compose çıktısı aynı biçimde el + sap; mürekkep rengi aynı algoritmayla çıkarılır. C# portu bu kuralları birebir izler.
+- **Click-through ve imleç**: çift Shift kalıcı click-through modunda TinyHand eli görünür kalır, gerçek imleç gizli kalır. Ayarlanabilir interact tuşu (macOS varsayılan ⌥) basılıyken geçici click-through; `interactKeepsHand` true ise el görünür kalır, false (varsayılan) ise gerçek imleç görünür ve el gizlenir.
+- **Mürekkep rengi**: `Preferences.InkChoice` birebir — varsayılan `.match` = seçili el stilinin rengi ("el hangi renkse o renkte çizer"); sabit seçenekler red/orange/yellow/green/blue/purple(`#8754F2`)/white/black; stil renkleri `PointerStyle` tablosundaki hex değerleridir.
+- **Fade**: `Preferences.fadeSeconds` aynı varsayılan ve aralık.
+- **Ses**: aynı tap sesi seti — macOS tarafında gömülü `tap_*.wav` dosyaları: thock, click, tock, clack, typewriter, snap, wood block, pop, boop, blip, coin, pew, squeak, quack, chirp (15 ses; aynı dosyalar depodaki `assets/` altından Windows'a gömülür), davranış: tıklamada çalma; seçim anında uygulanır (ses havuzu seçim başına yeniden kurulur).
+
+## Erken doğrulanacak varsayım (M1 spike)
+
+4K fullscreen `UpdateLayeredWindow` @ 120 Hz maliyeti. Ölçüm eşik dayatmak için değil, karar vermek içindir:
+
+1. Önce **GDI+ mevcut makinede denenir**. Ölçüm kaydı tutulur (referans makine, monitör yenileme hızı, görüntülenen kare hızı, p95 kare süresi, CPU kullanımı), ama %90 fps / 10 ms / %5 CPU gibi eşikler önceden geçiş şartı yapılmaz.
+2. **Görünür takılma veya yüksek CPU kullanımı** varsa kirli bölge güncellemesi (`UpdateLayeredWindowIndirect`) ölçülür.
+3. Sonuç yetersizse Direct2D + `DirectComposition` kararı o zaman verilir — bu geçiş yüzey ve sunum yönetimini de etkilediğinden ayrı bir teknik karardır (tek render sınıfı sınırları içinde kalsa da).
+
+Ölçüm değerleri ve render kararı PROGRESS.md'de spike maddesinin yanına yazılır.
+
+**Spike sonucu ve karar (12 Kasım 2026):** İlk spike kararı "GDI+ kalır, kirli bölge ULWI" idi. M1 sırasında eklenen kare-süresi ölçümleri (HUD: periyot/draw/present halkaları, `--fpscheck`) bu kararı revize etti: ULW/ULWI present çağrıları bu makinede DWM redirection senkronunda **değişken 7–16 ms** bloklanıyor; kirli-bölge present ile gerçek el kadansı ~30 fps'e düşüyor (fps sayacı 60 gösterse de), tam-çerçeve present ile 60 fps'e sığınabiliyor ama periyot p95 21–27 ms'ye dağılıyor. Flip-model sunum (DXGI `Present`) DWM'e asenkron kuyruklanır ve bu bloklamayı ortadan kaldırır. Karar: **M2'ye geçmeden Direct2D + DirectComposition geçişi — M1.5 kilometre taşı.** Ölçüm kayıtları PROGRESS.md günlüğünde (12 Kasım fps turu).
+
+## Proje yapısı
+
+```
+windows/
+├── PLAN.md              ← bu dosya
+├── PROGRESS.md          ← ilerleme izleme
+├── global.json          ← .NET SDK sürümü sabitleme
+├── TinyHand.sln
+│   ├── TinyHand/           (WinForms tray host)
+│   ├── TinyHand.Interop/   (P/Invoke: hook, layered window, protokol)
+│   └── TinyHand.Tests/
+├── installer/              (Velopack config: velopack.json)
+└── scripts/                (release-windows.ps1 + e2e/cursorcheck harness'leri)
+```
+
+## Kilometre taşları
+
+### M1 — İskelet ve spike
+
+#### Kurulum gereksinimleri (geliştirmeye başlamadan önce)
+
+Geliştirme makinesi (Windows 11 x64 — hedef işletim sistemi yalnızca Windows 11 x64'dür, Windows 10 desteklenmez):
+
+- [x] .NET 10 SDK (`winget install Microsoft.DotNet.SDK.10`; WindowsDesktop/WinForms iş yükünü içerir) — runtime tek başına yeterli değildir *(kurulu, 10.0.404 — 12 Kasım 2026)*
+- [x] Git (kurulu) *(12 Kasım 2026)*
+- [x] `dotnet --list-sdks` çıktısında .NET 10 SDK göründüğünü doğrula *(12 Kasım 2026)*
+- [x] İlk `dotnet build` doğrulaması çözüm iskeleti oluşturulduktan sonra yapılır (aşağıdaki ilk M1 görevi); iskelet yokken build kontrolü anlamsızdır *(başarılı; 18 birim testi geçti — 12 Kasım 2026)*
+
+Kurulumsuz kalanlar:
+
+- NAudio, Velopack: NuGet / `dotnet tool install` ile otomatik; ayrı kurulum gerekmez
+- GDI+ / Win32 API'leri: Windows'un kendi bileşenleri, kurulum yok
+- CI (`windows-latest`): .NET 10 SDK `global.json`'daki sürümle açıkça kurulur (`actions/setup-dotnet`); runner imajındaki varsayılan SDK'ya güvenilmez
+
+> **Kural:** Yukarıdaki gereksinimler kurulup doğrulandıktan **sonra** M1 geliştirmesine başlanır. Gereksinim eksikken kod yazılmaz.
+
+M1 görevleri:
+
+- [x] Çözüm iskeleti (sln, 3 proje, `global.json`), CI'da build → ilk `dotnet build` kontrolü bu görevle yapılır *(12 Kasım 2026; `build-windows` CI işi eklendi; kayıt PROGRESS.md M1)*
+- [x] Girdi/imleç prototipi (tek prototipte birlikte) *(12 Kasım 2026; alt maddelerin tamamı `scripts/e2e-m1.ps1` ile otomatik doğrulandı — 10/10; ayrıntılar PROGRESS.md M1)*:
+  - `WH_MOUSE_LL`: aktifken tıklamayı yut; kendi `SendInput` olayları `dwExtraInfo` imzasıyla ayıklanır (`LLMHF_INJECTED` başka süreçler için de set olur, tek başına ölçüt değil); hook'lar ayrı mesaj döngülü iş parçacığında
+  - Overlay: monitör başına layered window, imleç konumunda el çizimi *(M1.5'te DirectComposition'a taşındı)*
+  - Çizim sırasında alttaki uygulama tıklanmaz; toolbar bölgesi hit-test → komut hook'tan iletilir
+  - Çift Shift → alttaki uygulamaya tıklama (click-through); tıklama, elin **opak** piksellerinin üzerinde de hedef uygulamaya gider (yalnızca hook'un olayı bırakması yetmez — hit-test de geçmeli)
+  - Fare basılıyken mod değişirse down ve up olayları aynı pencereye gider
+  - Esc → temizle + kapat + gerçek imlecin geri gelmesi; gerçek imleç aktifken `WM_SETCURSOR` ile gizli *(imleç görünürlüğü `scripts/cursorcheck-m1.ps1` ile otomatik doğrulandı — 7/7)*
+- [x] Hook yaşam döngüsü: ayrı mesaj döngüsünün çalıştığı, callback süresinin ölçüldüğü ve kapatıp açınca hook'ların yeniden kurulduğu doğrulanır *(12 Kasım 2026; `--hookcheck`)*
+- [x] Spike: 4K fullscreen `UpdateLayeredWindow` @120 Hz — GDI+ önce mevcut makinede denenir (görüntülenen kare hızı, p95 kare süresi, CPU kullanımı kaydedilir); takılma/yüksek CPU varsa kirli bölge (`UpdateLayeredWindowIndirect`) ölçülür; DirectComposition kararı sonuca bırakılır *(12 Kasım 2026; ölçümler PROGRESS.md'de; sonuç → M1.5 kararı)*
+- [x] Tray simgesi + aç/kapa menüsü (Ctrl+Alt+H) *(12 Kasım 2026)*
+- [x] Test matrisi: normal çizim, toolbar tıklaması, çift Shift ile alttaki uygulamaya tıklama (elin opak kısmı dahil), fare basılıyken mod değişimi (down/up aynı pencereye), Esc ile imleç dönüşü; farklı DPI'lı iki monitör arasında geçiş; ekran kilidi (Win+L) sonrası overlay/imleç/hook davranışı *(ilk 5 madde + imleç görünürlüğü otomatik doğrulandı: e2e 10/10, cursorcheck 7/7 — 12 Kasım 2026; **çift-DPI ve Win+L donanım gerektiriyor, M5'in çok monitör test geçişine taşındı**)*
+- **Çıkış kriteri (karşılandı, 12 Kasım 2026):** TinyHand eli görünüyor; çizim tıklaması alta sızmıyor; çift Shift'te tıklama alttaki uygulamaya ulaşıyor; Esc gerçek imleci geri getiriyor. Ek doğrulamalar: Ctrl+Alt+H ile açılıp kapanıyor, hook kapatıp açınca yeniden kuruluyor, test matrisi (opak piksel, down/up, farklı DPI'lı monitör geçişi, ekran kilidi) geçiyor *(çift-DPI ve Win+L hariç — M5'e taşındı)*; spike ölçümleri ve render kararı PROGRESS.md'de kayıtlı.
+
+### M1.5 — Render yüzeyi geçişi (Direct2D + DirectComposition)
+Karar gereği M2'den önce uygulanır; gerekçe spike bölümündeki sonuç notu (ULW/ULWI present bloklaması ölçümleri). Girdi/imleç/hook katmanı ve kompozisyon döngüsü mimarisi değişmez; yalnız boyama ve sunum değişir (tek render sınıfı sınırları içinde).
+
+- [x] Overlay pencere stili: `WS_EX_LAYERED` → `WS_EX_NOREDIRECTIONBITMAP`; D3D11 cihaz + DXGI flip-model swap chain + DirectComposition cihaz/target/visual iskeleti, monitör başına (13 Kasım 2026)
+- [x] El sprite, mürekkep, toolbar, HUD çizimlerinin Direct2D portu (M1 sahnesi görsel olarak birebir; DPI ölçekleme korunur) (13 Kasım 2026). Mürekkep, ilk biçimin O(toplam mürekkep) kare çizimi (her karede tüm segment `DrawLine` + nokta listesi kopyası) uzun çizimlerde fps düşürdüğü için kalıcı `InkLayer` bitmap'ine taşındı: hook→`InkJournal`→monitör başına artımlı boya, karede tek blit; kare maliyeti O(yeni nokta)
+- [x] İmleç gizleme ve click-through mekanizmaları aynen kalır: `WM_SETCURSOR` + boş imleç; click-through stili gerçeklemede `WS_EX_TRANSPARENT` **tek başına** `WS_EX_NOREDIRECTIONBITMAP` pencerede hit-test'i geçirmiyor (M1.5 e2e turunda ölçüldü) — `WS_EX_TRANSPARENT | WS_EX_LAYERED` çiftiyle (DComp görselini bozmaz, pixel probe ile doğrulandı) + `WM_NCHITTEST → HTTRANSPARENT` aynı-iş parçacığı yedekleme yoluyla gerçeklendi; `WS_EX_LAYERED` yalnız click-through bölümlerinde eklenir. E2E ve cursorcheck ile yeniden doğrulandı *(13 Kasım 2026)*
+- [x] Kompozisyon döngüsü (yenilemeye kilitli ticker) ve ölçüm altyapısı (HUD, fpscheck, halkalar) aynen taşınır (13 Kasım 2026; kirli-bölge ULW kodu kalktı — flip modelde kalıcı yüzey yok, her kare tam çerçeve)
+- **Çıkış kriteri (karşılandı, 13 Kasım 2026):** present kuyruğa bırakma <1 ms'de, bloklama yok; 60 Hz ekranda kare periyotu p95 ~17 ms civarı sabitleşir; `fpscheck` wiggle + sweep senaryolarında görsel takılma kaybolur; e2e-m1 10/10, cursorcheck 7/7, birim testleri geçer; ölçümler PROGRESS'e kaydedilir.
+
+### M2 — Çizim
+- [x] Sürükle → mürekkep çizimi (Direct2D; M1.5 sonrası), renk/kalınluk ölçeği *(13 Kasım 2026)*
+  - Görsel sözleşme (macOS `Ink.swift` + `Preferences.InkChoice` — 13 Kasım 2026 kaynak taraması): **renk `InkChoice` ile belirlenir** — varsayılan `.match` = seçili el stilinin rengi (`PointerStyle` tablosundaki hex; kullanıcı gözlemi: "el hangi renkse o renkte çiziyor"); sabit seçenekler red/orange/yellow/green/blue/purple(`#8754F2`)/white/black (`Preferences.inkChoice`, ayarı M4'te); stroke gölgesi siyah, opacity 0.18, radius 1.5, offset (1, −1.5); yuvarlak cap/join; **yumuşatılmış path** (macOS `smoothPath`) + **1.5 pt mesafe dedup** (`extend`); kalınlık `max(3, monitörYüksekliği × 0.0055)` (`ArmView.inkWidth`), DPI ile ölçekli
+  - InkLayer mimarisi per-stroke fade'ye hazır: macOS da stroke bitince bitmap'e dondurur (`freeze`); M2'de kalıcı katman per-stroke bitmap/lifetime'a genişletilir (üst üste stroke'lar bağımsız solar)
+  - **Uygulama (13 Kasım 2026):** `Logic/InkModel.cs` — 36 yerleşik stil + laser tablosu (`PointerStyle`), `InkChoice` çözümlemesi, `InkMetrics` (kalınlık/ok/dedup), `InkFade` (easeIn cubic-bezier), `InkGeometry` (smoothPath midpoint + `addHead`). `Overlay/InkLayer.cs` — hook→`InkJournal` stroke yaşam döngüsü (Begin/Extend/End/Clear), canlı stroke monitör boyutlu bitmap'e artımlı boyanır (kare maliyeti O(yeni nokta)), stroke bitince bbox bitmap'e dondurulur ve bağımsız solar. Gölge, 18 % siyah + radius kadar genişletilmiş offset stroke geçişiyle yaklaşıklanır (1.5 pt yarıçapta blur farkı bir pikselin altında). Prototip stili `hand_black.png` = macOS "Midnight" → `.match` = `#1D1D21`; M3'ün 36 stil seti macOS varsayılanı lavender (`#8754F2`) ile geldi (13 Kasım 2026). **Yumuşatma (13 Kasım, kullanıcı isteği):** macOS'ta yalnız `smoothPath` var; Windows'ta minik mouse hareketlerinin çizgiyi bozmaması için girişe iki aşamalı hat eklendi (`Logic/InkSmoothing.cs`): (1) **izotropik One Euro** filtresi (`dCutoff` 1 Hz; kesim frekansı hız büyüklüğünden — eksen başına kesim köşegen çizgiyi döndürüyordu), (2) **streamline** `InkStabilizer` — son `window` px'lik yolun `(1 − d/window)²` ağırlıklı ortalaması; düz çizgiyi birebir korur, fare kuantizasyonunun 1 px merdivenini ve filtrenin bıraktığı dalgayı siler. Nokta hattı **sub-pixel** (`PointF`): tam sayıya yuvarlama yumuşatılmış yolu yeniden merdivene çeviriyordu. **Ctrl+Alt+S** seviyeyi canlı döngüler: off / light (1 Hz, 0.05, 6 pt) / medium (0.5, 0.03, 10 pt) / strong (0.3, 0.02, 13 pt) / max (0.15, 0.015, 16 pt; varsayılan); her değişiklikte üst-orta bölgede 1.5 s'lik toast. Bırakışta `Drain` pencereyi sıfıra indirip stroke'u imlecin bırakıldığı noktaya düz kuyruk bırakmadan getirir. Ölçüm: 20° / 40 px/s / 6 Hz ±1,5 px titreme + 1 px kuantizasyonda sapma 1,00 px → 0,19 px; gecikme ~5 px (el sprite'ının altında), duran imleçte stroke ~1 px gerisine oturur. **El ucu (13 Kasım düzeltmesi):** macOS `HandAsset.measure` portu — en üst opak satır + `h/200` altındaki satırın x-merkezi `tip/tipX` olarak ölçülür ve el bu noktayla imlece çivilenir (eski üst-orta çivileme ucu ~6 px sol / ~14 px altta bırakıyordu); M3'te aynı ölçüm stil başına uygulanacak.
+- [x] Ctrl basılıyken ok ucu *(Ctrl onaylandı, 14 Kasım 2026 — kullanıcı doğruladı)* — ok başı `size = max(14, lineWidth × 3.2)` (macOS `addHead`) *(13 Kasım 2026; macOS ⌘ karşılığı)*
+- [x] Fade animasyonu (`Preferences.fadeSeconds` uyumlu): per-stroke, delay `max(0.5, fadeSeconds)`, süre **0.6 s**, easeIn; bittikten sonra stroke kaynağından çıkar (macOS `fade`) *(13 Kasım 2026; varsayılan 3 s, `TH_FADE=0` başlangıç keep modu; fade sürerken kompozitör busy kadansa geçer; **Ctrl+Alt+F** fade'i runtime'da açar/kapatır)*
+- [x] Ctrl+Alt+X: mürekkebi temizle; Esc: temizle + kapat *(13 Kasım 2026; `RegisterHotKey` Ctrl+Alt+X, Esc hook'tan)*
+- [x] Çizim yumuşatma: iki aşamalı hat — izotropik One Euro giriş filtresi + mesafe-ağırlıklı streamline (`InkStabilizer`), sub-pixel nokta hattı, Ctrl+Alt+S ile canlı seviye döngüsü (off / light / medium / strong / max) *(13 Kasım 2026, kullanıcı isteği: "en düşük mouse hareketi çizimde çok belli oluyor"; macOS'ta yalnız `smoothPath` var, bu Windows'a özgü ek)*
+- [x] Ayar göstergesi: kısayol değişikliklerinde üst-orta bölgede 1,5 s'lik toast (`Smoothing: max`, `Fade: off`, `Ink cleared`) *(13 Kasım 2026)*
+- **Çıkış kriteri (karşılandı, 13 Kasım 2026):** el ile çizim yapmak, oka metametin, tam klavye kısayol seti. Kanıt: `--inkcheck` **20/20** (çizim rengi `#1D1D21` piksel-mükemmel, canlı stroke tam genişlikte, Ctrl'siz ok yok / Ctrl'li ok var ve açık V, el ucu imleçte, fade sonrası mürekkep 0 piksel, Ctrl+Alt+X anında temizler, Ctrl+Alt+F fade'i açar/kapatır, Ctrl+Alt+S seviyeyi döngüler ve toast görünür); `--fpscheck --ink` 60,0 fps (draw 0,81 / present 0,40 ms, periyot p95 16,93 ms); birim testleri **57/57**; e2e-m1 10/10; cursorcheck 7/7.
+
+### M3 — Etkileşim kalitesi — TAMAM (13 Kasım 2026)
+- [x] Çift Shift → click-through (M1 prototipinde doğrulanan davranışın ürün kalitesine taşınması) *(13 Kasım 2026)*
+  - macOS `shiftChanged` semantiği birebir: **Shift tap** = 0,3 s içinde basılıp bırakılan ve arada başka girdi olmayan Shift; iki tap 0,35 s içinde → click-through kilidi. `ShiftTapDetector` (saf mantık, saat enjekte edilir) girdi sayacı tutar (başka tuş / mouse down) — büyük harf yazmak click-through açmaz; Ctrl/Alt/Win basılıyken tap sayılmaz. Mod değişiminde üst-orta toast (`Click-through: on/off`); el görünür kalır, gerçek imleç gizli kalır (sözleşme).
+- [x] Basılı interact tuşu → geçici click-through (macOS `interactKey`, varsayılan ⌥ ↔ Alt); `interactKeepsHand` davranışı *(13 Kasım 2026)*
+  - Alt basılıyken tıklamalar alta geçer; `interactKeepsHand` false (varsayılan) ise el gizlenir ve gerçek imleç geri gelir, true ise el görünür kalır ve imleç gizli kalır. **Alt tek başına** gerekir: Ctrl+Alt uygulamanın kısayol öneki olduğundan akor interact modunu tetiklemez (Windows'a özgü iyileştirme).
+  - **Modifier asla yutulmaz:** LL hook'ta bir keyup'ı yutmak sistemin tuş durumunu "basılı" bırakır (sonraki her tuş Alt+tuş olarak gider — M3 test turunda klavye kilitlenmesi olarak görüldü). Bu yüzden Alt keyup'ı uygulamaya gider; sonuç tek başına Alt tap'inin standart Windows davranışıdır (alttaki uygulamanın menü çubuğu vurgulanır). Interact tuşu M4 ayarlarından değiştirilebilir.
+- [x] Toolbar: 36 stil + lazer + ses düğmesi + çıkış; hit-test / `passThroughRects` mantığı *(13 Kasım 2026)*
+  - `ToolbarModel`: 37 stil (36 el + lazer) + ses + çıkış = 39 düğme; 40 px düğme, 6 px aralık, 10 px iç boşluk, 16 px köşe radiusu; monitör dar ise satırlara sarar (her düğme panel içinde kalır). Panel düğmeler arası boşlukta da tıklamayı yutar (pass-through bölgesi); komut hook içinden yönlendirilir. Bant yalnız **çizim modunda** tıklanabilir: click-through veya interact tuşu basılıyken tıklamalar alta geçer (önce moddan çıkılır). Yalnız birincil monitörde çizilir; sıra macOS tablosuyla aynıdır (lavender … cookie, lazer, ses, çıkış). Seçimde düğme %18 beyaz vurgu alır, toast stil adını gösterir ve `InkChoice.Match` mürekkebi anında o stilin rengine çevirir.
+  - Görsel: yarı saydam koyu panel (24,24,28 / %84) + %18 beyaz hairline; seçili stil %18 beyaz yuvarlak vurgu; stil ikonları gömülü PNG'lerden üretilen 96×96 kırpılmış thumbnail'lar (arka planda ön yüklenir, hazır olana kadar renkli nokta), lazer ikonu kırmızı parlayan nokta, ses ikonu hoparlör (kapalıyken çizik), çıkış ✕. Panel bir kez bitmap'e boyanıp her karede tek blit edilir (39 düğmeyi her karede boyamak ~1,7 ms sürüyordu; ölçüm: draw p95 1,7 → 0,9 ms).
+- [x] **El görsel eşliği** (macOS `ArmView`; asset PNG'ler el + sap compose'ıyla geldiğinden sap için ek iş yok) *(13 Kasım 2026)*
+  - `HandAssets`: macOS `HandAsset.measure` portu (handTop/tip/wrist/rodEnd/tipX/rodX/handMinX/handMaxX), 2 girişli sprite LRU'su, 96×96 thumbnail. Gölge silueti 1/4 çözünürlükte, 3 geçişli box blur ile ve blur'un taşabileceği saydam dolguyla (2 × yarıçap) üretilir; gölge parçaları dolguyu yalnız bilek dikişinden uzağa doğru genişletir (iki yöne genişletince dikdörtgenler bilekte çakışıp gölgeyi iki kez çiziyordu).
+  - `HandPoseSolver`: gövde ekran altındaki grip noktasından uzanır (grip = imleç + %30 ekran genişliği sağda, ekran altının %12 altında), gövde uzunluğu `pointerSize × ekranYüksekliği × (1 − 0.06 × press)`, sap mesafeye göre uzar (`minRodFrac` %5 taban), dönüş parmak ucunu imlece oturtur, kaldırma `liftFrac × ekranYüksekliği × (1 − 0.8 × press)`. Grip takibi `gripFollow` 0,08'in **120 Hz referansına göre dt ile ölçeklenir** ve Windows'ta **%25 hızlandırılır** (`GripFollowSpeedup = 1.25`): 60 Hz'de kare başına ~0,188, 20 Hz idle tick'te ~0,47, τ ≈ 0,08 s (macOS referansı 0,1 s).
+  - **Gölge (Windows ayarları, 14 Kasım):** blur her kaldırmada tam basınç yarıçapıdır (4K'da 14 px; macOS dinlenmede 45 px kullanır) — gölge her zaman elin siluetini okur; dinlenme gölgesi %8 büyük ve daha şeffaftır (`ShadowScale = 1 + 0.08 × (1 − press)`, opaklık `0.20 + 0.08 × press`); ofset `ShadowOffsetScale = 0.3` ile ele yakındır (dinlenmede 23, 39 px; basınçta 5, 8 px). Kaldırma yalnız ofseti, boyutu ve opaklığı değiştirir.
+  - Sprite iki parçaya bölünür: el (PNG'nin üst yarısı, parmak ucu en üstte) ve sap (alt yarısı); el parçası sprite'ın üstünde, sap altında çizilir ve sprite dik durur. **Düzeltme (13 Kasım, kullanıcı raporu "el ve değnek ters"):** ilk uygulama `contentsRect`'i y-down sanıp el/sap kaynak dikdörtgenlerini ters aldı — el sapın yerine, sap elin yerine çiziliyordu; kaynak dikdörtgenleri el = üst yarı, sap = alt yarı olacak şekilde düzeltildi ve yerel uzay gövde −y yönünde uzanacak biçimde tanımlandı (sprite dik). `--m3check` "hand hangs below the cursor" + "hand above the stem" piksel kontrolleri ve `SpriteTip_MapsToTheCursor` birim testi bunu kilitler.
+  - Lazer stili: el yok; kırmızı nokta + radyal gradyan parıltı + açık çekirdek (`r = max(4, ekranY × 0.0038 × size/0.13) × (1 + 0.2 × press)`, parıltı `r × (2.2 + press)`).
+- [x] **Tıklayarak gösterme** (macOS `ArmView.press()` + `aim()` basınç döngüsü, `ArmView.swift:117-130`) *(13 Kasım 2026)*
+  - Her yutulan down'da `pressAmount = 1` (anında, sönümsüz) + tap sesi; bırakınca kompozitör her karede `press += (0 − press) × 0.18` uygular (basınç 0'a inene kadar busy kadans). Interact modunda da basılır (macOS `onInteractDown`), ses çalınmaz. Tap/çizim ayrımı korunur: mürekkep yalnız 4 pt sürüklemede.
+- [x] `TapSound` (NAudio), ses aç/kapa *(13 Kasım 2026)*
+  - 15 gömülü `tap_*.wav` (macOS dosyaları birebir), 4 sesli `WaveOutEvent` havuzu, kendi iş parçacığında çalar (hook asla ses cihazında bloklanmaz; macOS da ayrı kuyruk kullanır). Toolbar hoparlör düğmesi `Preferences.SoundOn`'u çevirir; ses seçimi M4 ayarlarına (`Preferences.TapSound`, varsayılan thock).
+- [x] Busy 120 Hz / idle 20 Hz fps yönetimi (OverlayController mantığı) *(13 Kasım 2026)*
+  - Busy hedefi monitör yenilemesine bağlı (`Clamp(hz, 60, 120)`), idle 20 Hz; geçiş histerezisi: son girdiden 500 ms sonra idle, basınç sönümü veya grip oturması sürerken busy kalır. Idle'da da kare üretilir (macOS 20 Hz timer'ı gibi) — fps sayacı ve HUD idle'da anlamlı kalır; kirli bayrak o kareyi busy kadansa yükseltir.
+- **Çıkış kriteri (karşılandı, 13 Kasım 2026):** macOS kullanım tablosundaki her davranış el ile yapılabiliyor ve akıcı. Kanıt: yeni `--m3check` **28/28** (toolbar 39 düğme + boyanmış + boşluk yutma, stil seçimi + mürekkep rengi, lazer noktası + el yok, ses aç/kapa, el aşağı sarkıyor + el sapın üstünde, basınçta gölge görünür + gölge elin siluetini izliyor (yayılım ≤ 45 px), basınç küçültmesi + geri oturma, tap sesi, interact tuşu: el gizli + tıklama alta gidiyor + geri dönüş, çift Shift: kilit + el görünür + tıklama alta gidiyor + kilit açma + çizim tıklaması yutuluyor, busy 60 / idle 20 fps); `--inkcheck` 20/20; `--fpscheck --ink` 60,0 fps (draw p95 0,5 / present p95 0,4 ms, periyot p95 16,9 ms); birim testleri **91/91**; e2e-m1 10/10; cursorcheck 7/7.
+
+### M4 — Sistem entegrasyonu — TAMAM (14 Kasım 2026)
+- [x] `tinyhand://` protokol kaydı + named pipe tek-instance + komut iletme (`on/off/toggle/clear/style/<id>/sound/*`) *(14 Kasım 2026)*
+  - `Automation`: HKCU `Software\Classes\tinyhand` (`URL Protocol`, `shell\open\command = "<exe>" "%1"`), URL grameri macOS ile birebir (`Uri.Host` + ilk yol parçası; bilinmeyen komut loglanır ve yok sayılır). `SingleInstance`: `Local\TinyHand.SingleInstance` mutex + `TinyHand.Command` named pipe; ikinci süreç URL'yi çalışan örneğe iletip çıkar (macOS LaunchServices davranışı). `style/<id>` stili seçer ve overlay'i açar; `sound/on|off|toggle`; `clear`; `on/off/toggle`.
+- [x] `%APPDATA%\TinyHand\state.json` yazımı (pid, aktiflik, stil, ses, styles listesi; normal çıkışta dosya silinir — sözleşme) *(14 Kasım 2026)*
+  - Anahtarlar alfabetik (macOS `.sortedKeys`), 2 boşluk girinti; `styles` her stili `id/name/type` (`hand`/`custom`/`laser`) ile yayımlar. Yazım arka plan iş parçacığında debounce edilir (hook/kompozitör diskte bloklanmaz); normal çıkışta dosya silinir, çökme sonrası kalan dosya pid ile ayırt edilir.
+- [x] Ayarlar penceresi (fade süresi, stil seçimi, kısayollar, interact tuşu, `interactKeepsHand` ayarı) *(14 Kasım 2026)*
+  - macOS `SettingsView` bölümleri: General (kayıt edilebilir toggle/clear kısayolları, interact tuşu + keepsHand, çift Shift), Pointers (37 stil + custom eller, seçim, silme, "Make your own hand"), Appearance (boyut, gölge), Drawing (mürekkep rengi, fade, smoothing), Sound (15 tap sesi + Off, önizleme; seçim anında uygulanır), About (sürüm, bağlantılar, sıfırlama). Kısayol kaydı sırasında global kısayollar bırakılır (macOS gibi); reddedilen kayıt eski kısayolu geri kurar. Ayarlar `%APPDATA%\TinyHand\settings.json`'a yazılır (macOS UserDefaults karşılığı; `state.json` sözleşmesi ayrı kalır).
+- [x] Welcome penceresi *(14 Kasım 2026)*
+  - Windows'ta Accessibility izni yok; kart "You're all set" durumunu gösterir: toggle kısayolu, Start (overlay'i açar), tray ipucu. İlk çalıştırmada bir kez (`welcomeShown`), tray menüsünden yeniden açılabilir; macOS gibi açılmadan overlay kapatılır.
+- [x] HandMaker: custom PNG el ekleme akışı — PNG doğrulama + compose kodunun C# portu, macOS kuralları birebir *(14 Kasım 2026)*
+  - `Logic/HandMaker.cs`: macOS `check` kuralları birebir (alfa kanalı, ≥64 px, kenar doluluk ≤ %2, tek bağlı bileşen ≥ %97, en-boy 1.05–2.8, el yüksekliği ≥ %50, üst bant ≤ %40, bilek ≥ %20, yumuşak gölge ≤ %8) ve aynı kullanıcı mesajları; compose 1024×1536, el üstte 150 px, sap 1462 px'e kadar aynı gradyan/geometri; mürekkep rengi aynı bucket/oy algoritması. `Logic/CustomHands.cs`: `%APPDATA%\TinyHand\Hands\custom-xxxxxxxx.png` + `hands.json`, `PointerStyle.All` custom elleri lazerden önce ekler; toolbar ve ayarlar anında görür. Prompt şablonu macOS ile aynı.
+- **Çıkış kriteri (karşılandı, 14 Kasım 2026):** Raycast/PowerShell/URL otomasyonu ve ayarlar tam çalışıyor. Kanıt: `--m4check` **71/71** (ses seçimi düzeltmesiyle üç kontrol eklendi; protokol kaydı + `%1`, URL grameri, state.json içeriği/anahtar sırası/silme, on/off/toggle/clear/style/sound komutları, ikinci örnek reddi + pipe iletimi, settings.json round-trip + reset, HandMaker geçerli/6 geçersiz vaka, custom el ekleme/seçme/toolbar/silme, tüm ayar sayfaları + welcome); `scripts/m4-live.ps1` gerçek süreçle protokol→pipe→state akışını doğruladı (launch active, off/style/sound/toggle, Ctrl+Alt+Q sonrası state.json yok, settings.json var); birim testleri **130/130**; regresyonlar: `--m3check` PASS, `--inkcheck` 20/20, `--fpscheck --ink` 60 fps (draw p95 1,3 / present p95 0,6 ms), e2e-m1 10/10, cursorcheck 7/7.
+
+### M5 — Dağıtım — TAMAM (14 Kasım 2026)
+- [x] Velopack kurulumu + öz-güncelleme; güncelleme varlıkları kanal bazlı: `releases.<channel>.json` bildirimi ve ilgili `.nupkg` tam/delta paketleri Release'e dahil *(14 Kasım 2026)*
+  - Kanal **`win`**; feed `releases.win.json`. `Updater` (`Velopack` 1.2.161) `GithubSource` ile aynı depoyu okur; `VelopackApp.Build().SetAutoApplyOnStartup(true).Run()` `Main`'in ilk satırıdır (kurulum/güncelleme/kaldırma kancaları). Tray'de **Check for updates…** (arka planda 4 s sonra sessiz kontrol + balon), Ayarlar → About'ta sürüm + kontrol düğmesi; indirme ilerleme penceresiyle, sonra `ApplyUpdatesAndRestart`. Geliştirme derlemesi "not installed" der ve ağa çıkmaz.
+  - Paketleme: `installer/velopack.json` (packId/packTitle/channel/mainExe/runtime/setupName/portableName) + `scripts/release-windows.ps1` → `dotnet publish -r win-x64 --self-contained` → `vpk pack --delta BestSpeed` → `TinyHand-WindowsSetup.exe`, `TinyHand-Windows-portable.zip`, `releases.win.json`, `TinyHand-<sürüm>-full.nupkg` + `-delta.nupkg`, SHA256. `-FetchPrevious` önceki sürümün `.nupkg`'unu indirir; delta ancak o zaman üretilir (ölçüm: 1.1.0 → 1.1.1 deltası 99 KB, tam paket 119 MB).
+  - Sürüm tek kaynaktan: `VERSION` dosyası `csproj`'da `Version`'a okunur; `FileVersion`/`ProductVersion` SDK türevi olduğu için `-p:Version=<tag>` hepsini birlikte günceller (ilk turda `FileVersion` 1.1.0'da kalmıştı — düzeltildi).
+- [x] Kod imzalama kararı: imzalanmayacak (sertifika alınmıyor; SmartScreen uyarısı belgelenir) *(README'de belgelendi)*
+- [x] GitHub Actions `windows-latest` işi: publish + Velopack → Windows varlıkları (`TinyHand-WindowsSetup.exe`, taşınabilir zip, kanalın `releases.<channel>.json` bildirimi ve `.nupkg` paketleri) var olan macOS release adımının açtığı **aynı GitHub Release'e** eklenir — tek yayın adımı, iki platform paketi *(14 Kasım 2026)*
+  - `release.yml`'e `release-windows` işi eklendi (`needs: release`, `contents: write`): SDK `global.json` sürümüyle kurulur, `vpk` global araç olarak kurulur, `release-windows.ps1 -Version <tag> -FetchPrevious` çalışır, varlıklar `gh release upload --clobber` ile macOS işinin açtığı Release'e eklenir. `build.yml`'e self-contained publish adımı eklendi (paketleme kırılması tag'de değil PR'da görünsün).
+- [x] Çok monitör + DPIv2 + %150 ölçek test geçişi (M1 test matrisinin genişletilmesi) *(14 Kasım 2026; `--m5check` 32/32 — gerçek 100 % + 125 % çift-DPI kurulumu)*
+  - **Bulgu ve düzeltme (çok monitör):** el her monitörde çiziliyordu; imleç ikinci ekrandayken birincil ekranın alt kenarından ikinci ekrana uzanan **ikinci bir kol** oluşuyordu (sol/üst yerleşimlerde görünür; bu makinenin sağ-yan yerleşiminde kırpılıyordu). `HandScene.DrawsPointerOn` ile el yalnız imlecin bulunduğu monitörde çizilir; `OverlayController.CursorMonitor()` grip hedefini de o monitöre göre hesaplar (grip eğimi artık imlecin ekranına göre).
+  - **Bulgu (test altyapısı):** mutlak `SendInput` koordinatları varsayılan olarak yalnız birincil monitöre eşlenir; ikinci ekrana enjeksiyon için `MOUSEEVENTF_VIRTUALDESK` + sanal ekran normalizasyonu gerekir (`Win32Input.MOUSEEVENTF_VIRTUALDESK` eklendi).
+  - **DPI:** ölçek `round(dpi/96)` tamsayıdır (M1 kararı); %150 (144 dpi) → 2. El boyu ekran yüksekliğine bağlı olduğundan (DPI'dan bağımsız) fiziksel boy aynı kalır; tamsayı ölçek toolbar/HUD/mürekkep minimumunu büyütür. `--m5check` 100/125/150/175/200 % tablosunu, toolbar'ın 1920/2560/3840 px'te panel içinde kaldığını ve HUD'un %150 monitöre sığdığını doğrular. **Gerçek donanım turu (14 Kasım 2026):** ikincil monitör %125'e alındı (1920×1080 @ 120 dpi, birincil 3840×2160 @ 96 dpi) — overlay sınırları fiziksel pikselde doğru, el/kol imlecin ekranında, ikinci ekranda mürekkep, imleç gizleme ve `WM_DISPLAYCHANGE` yeniden kurulumu geçti; el geometrisi DPI'lar arasında **birebir orantılı** (birincil −6,14 px @ 281 px el; ikincil −3,7 px @ 140 px el). Kesirli ölçek ileride ayrı bir iş olarak duruyor.
+  - **Ekran değişimi:** `WM_DISPLAYCHANGE` (ve `WM_DPICHANGED`) yolu gerçek mesajla sınanır — overlay seti yeniden kurulur, sınırlar korunur, el çizilmeye devam eder. Fiziksel %125 geçişi gerçek donanımda doğrulandı; yalnız ekran kilidi (Win+L) turu kaldı (oturum kilidi otomasyona kapalı).
+- **Çıkış kriteri (karşılandı, 14 Kasım 2026):** kurulum, güncelleme ve test geçişleri tamam; sürüm iki platformun paketleriyle aynı tag'den tek Release'te çıkar. Kanıt: `--m5check` **32/32** (gerçek 100 % + 125 % çift-DPI kurulumu; monitör envanteri, monitör başına overlay + DPI, el imlecin ekranında + karşı ekranda ikinci kol yok, ikinci ekranda mürekkep + temizleme, `WM_DISPLAYCHANGE` sonrası yeniden kurulum, ikinci ekranda gerçek imleç gizli/açık, DPI tablosu, güncelleme yüzeyi + indirme ilerleme penceresi); birim testleri **148/148**; gerçek kurulum turu: `TinyHand-WindowsSetup.exe --silent` → `%LOCALAPPDATA%\TinyHand` (kısayollar + kaldırma kaydı), kurulu 1.1.0 `--updatecheck` → 1.1.1 (delta=1), `--apply` → indirme + uygulama + yeniden başlatma, `current\TinyHand.dll` **1.1.1.0**, güncellenmiş kurulumda `--m5check` 30/30 (kurulu varyant), `Update.exe --uninstall` sonrası dizin/kısayol/registry temiz; regresyonlar: `--m3check` PASS, `--inkcheck` 20/20, `--m4check` 71/71, `--fpscheck --ink` 60,0 fps (draw p95 0,8 / present p95 0,4 ms), e2e-m1 10/10, cursorcheck 7/7.
+
+### M6 — Windows-only depo (macOS uygulamasını çıkarma) — TAMAM (14 Kasım 2026)
+
+Amaç: `only_windows` branch'inde depoyu **yalnızca Windows uygulaması** olarak bırakmak. macOS uygulaması (`Sources/`, Swift/AppKit) ve ona bağlı CI/paketleme adımları kalkar; Windows portu tek ürün olur. Bu bir "özellik" değil, depo şekli değişikliğidir — M1–M5 tamamlandıktan sonra yapılır.
+
+**Hukuk (karar verildi, 14 Kasım 2026):** MIT "modify" hakkını verdiği için macOS kodunu silmek serbesttir. Telif satırı **kalır**, çünkü depoda Kamran Ahmed'in assetleri (36 el PNG'si + 15 tap sesi) dağıtılmaya devam ediyor. `LICENSE` zaten iki satırı taşıyor (`Kamran Ahmed` + `Berkay Elagöz (Windows port)`); bu dosya silinmez, değiştirilmez. Assetler de kendi üretilenlerle değiştirilirse satır zorunlu olmaktan çıkar (tavsiye: yine de tutulur). "TinyHand" adı ve logosu MIT kapsamında değildir; yayın adı ayrı bir karardır.
+
+#### İsimler (repo adı ≠ ürün adı ≠ sözleşme adları)
+
+Üç ayrı "isim" var; yalnız ilk ikisi değiştirilebilir:
+
+| İsim | Nerede geçiyor | Değişebilir mi |
+|---|---|---|
+| **GitHub repo adı** (`berkayelagoz/tinyhand`) | `git remote`, README linkleri, `Updater.RepositoryUrl` | **Evet, kozmetik.** Değişirse: `git remote set-url origin <yeni>`, `Updater.RepositoryUrl`, README indirme linkleri. GitHub eski URL'yi yönlendirir ama Velopack `GithubSource` API'yi kullandığı için adresi açıkça güncellemek gerekir |
+| **Ürün adı** ("TinyHand") | pencere başlıkları, tray, kurulum sihirbazı, README | **Evet, ama marka kararı.** MIT kodu kapsar, adı ve logoyu kapsamaz. Kendi adınla yayınlayacaksan değiştir; upstream'in adını kullanacaksan README'de "TinyHand by Kamran Ahmed — Windows portu" demek yeterli |
+| **Sözleşme adları** | `tinyhand://`, `%APPDATA%\TinyHand`, Velopack `packId: TinyHand`, `TinyHand.exe` | **Hayır — değiştirme** |
+
+Sözleşme adları neden sabit:
+
+- `tinyhand://` — HKCU'ya kayıtlı protokol. Değişirse mevcut kısayollar, Raycast/PowerShell otomasyonu ve `state.json` sözleşmesi (macOS ile ortak gramer) ölür.
+- `%APPDATA%\TinyHand` — `state.json`, `settings.json`, `Hands/`. Değişirse kullanıcının ayarları, custom elleri ve state sözleşmesi bozulur.
+- `packId: TinyHand` (`installer/velopack.json`) — Velopack kimliği. Değişirse **kurulu uygulamalar güncelleme görmez**: Velopack yeni `packId`'yi ayrı bir uygulama sayar, mevcut kurulumlar `releases.win.json`'daki paketi kendine ait bulmaz.
+- `TinyHand.exe` — `mainExe`, kısayol hedefi, protokol komutu (`"<exe>" "%1"`).
+
+Özet: repo adını değiştirmek istersen değiştir, ürün adını değiştirmek marka kararıdır; ama `packId`, protokol şeması, AppData klasörü ve exe adı **aynı kalmalı**.
+
+#### İsim kararı (14 Kasım 2026): **StickHand** — UYGULANDI
+
+Ürün adı **StickHand** olur. Gerekçe: "el + değnek" görsel kimliğini korur (TinyHand ile aynı ailede okunur), kısa ve `stickhand://` / `%APPDATA%\StickHand` / `StickHand.exe` olarak temiz durur. Kontrol (14 Kasım 2026): NuGet'te paket adı boş, GitHub'da aynı adı taşıyan kayda değer proje yok, `stickhand.app` ve `stickhand.dev` DNS'te boş.
+
+**Durum (14 Kasım 2026):** yeniden adlandırma uygulandı — depo `berkayelagoz/stickhand`, kod tarafındaki tüm satırlar (packId, exe, protokol, AppData, mutex/pipe, UI metinleri, proje dosyaları, namespace'ler) güncellendi; build + 148 test + tüm harness'ler geçti. Ayrıntı: PROGRESS.md günlüğü.
+
+**Sıra kritik:** isim değişikliği **ilk release'ten önce** yapılır. Kurulu kimse yokken `packId`, protokol şeması ve AppData klasörü bedava değişir; bir kurulum olduktan sonra `packId` değişikliği mevcut kurulumları güncellemesiz bırakır (Velopack yeni kimliği ayrı uygulama sayar).
+
+| Ne | Eski | Yeni |
+|---|---|---|
+| `packId` / `packTitle` (`installer/velopack.json`) | `TinyHand` | `StickHand` |
+| Setup / portable dosya adları | `TinyHand-WindowsSetup.exe`, `TinyHand-Windows-portable.zip` | `StickHand-WindowsSetup.exe`, `StickHand-Windows-portable.zip` |
+| `AssemblyName` (exe) | `TinyHand.exe` | `StickHand.exe` |
+| `Product` / `AssemblyTitle` (`csproj`) | `TinyHand` | `StickHand` |
+| Protokol şeması + HKCU anahtarı | `tinyhand://`, `Software\Classes\tinyhand` | `stickhand://`, `Software\Classes\stickhand` |
+| AppData klasörü | `%APPDATA%\TinyHand` | `%APPDATA%\StickHand` |
+| Mutex / pipe adları | `Local\TinyHand.SingleInstance`, `TinyHand.Command` | `Local\StickHand.SingleInstance`, `StickHand.Command` |
+| `Updater.RepositoryUrl` | `nilbuild/tinyhand` | yeni repo (`berkayelagoz/stickhand`) |
+| Tray / pencere / MessageBox metinleri | "TinyHand", "TinyHand Settings" | "StickHand", "StickHand Settings" |
+| README / PLAN / PROGRESS başlıkları | TinyHand | StickHand |
+| İkon | `windows/TinyHand/assets/appicon.ico` (upstream türevi olabilir) | kendi ikonu |
+
+**Değişmeyenler:** `LICENSE` (Kamran Ahmed satırı kalır — assetler onun), `assets/hand_*.png` + `assets/sounds/` (onun eseri), namespace'ler (`TinyHand.Logic`, `TinyHand.Interop` — kullanıcı görmez, 30 dosyada geçer, dokunulmaz), davranış sözleşmeleri (state.json şeması, URL grameri, 36 stil + lazer, 15 ses, mürekkep rengi, fade).
+
+**Not:** `state.json`'ın *şeması* ve URL *grameri* aynı kalır; yalnız şema adı (`tinyhand://` → `stickhand://`) ve dosya yolu değişir. macOS ile ortaklık M6'da bittiği için bu kırılma kabul edilir. İsim değişikliğiyle birlikte "upstream'den yayınlama" seçeneği de düşer: yayın kendi deposundan (`berkayelagoz/stickhand`) yapılır.
+
+#### Silinecekler
+
+**Durum (14 Kasım 2026): silindi.**
+
+| Yol | Ne |
+|---|---|
+| `Sources/` | macOS uygulamasının tamamı (Swift/AppKit) |
+| `Package.swift`, `Package.resolved` | SwiftPM manifesti ve kilit dosyası |
+| `scripts/lib.sh`, `scripts/release.sh` | macOS bundle/sign/notarize/appcast betikleri |
+| `scripts/build-app.sh` | macOS bundle üretimi |
+| `scripts/make-icons.py`, `scripts/make-sounds.py` | macOS asset üretim araçları (assetler depoda hazır; isteğe bağlı, silinebilir) |
+| `assets/AppIcon.icns`, `assets/AppIcon.icon`, `assets/Assets.car` | macOS ikon varlıkları (Windows ikonu `windows/TinyHand/assets/appicon.ico`) |
+
+#### Kalacaklar (silinirse build kırılır)
+
+| Yol | Neden |
+|---|---|
+| `assets/hand_*.png` (36) | `TinyHand.csproj` gömüyor: `..\..\assets\hand_*.png` |
+| `assets/sounds/tap_*.wav` (15) | `TinyHand.csproj` gömüyor: `..\..\assets\sounds\tap_*.wav` |
+| `VERSION` | `TinyHand.csproj` sürümü buradan okuyor (`..\..\VERSION`) |
+| `LICENSE` | Telif + MIT metni; kurulum sihirbazı ve portable zip bunu taşıyor |
+| `windows/` | Ürünün kendisi |
+| `.github/` | CI (aşağıda düzenlenecek) |
+
+> Assetleri `windows/assets/` altına taşımak da mümkündür; o zaman `TinyHand.csproj` içindeki iki `EmbeddedResource` yolunu ve `release-windows.ps1`'in `$repoRoot` varsayımlarını güncellemek gerekir. **Öneri: kökte bırakmak** (daha az değişiklik, daha az kırılma).
+
+#### Düzenlenecekler
+
+**Durum (14 Kasım 2026): uygulandı.** Sapmalar: `build-windows` adı korundu (branch protection'daki check adı değişmesin); `docs/` kaldı (kullanıcı kararı); `build.yml`'deki çıplak `pull_request` anahtarı `pull_request:` olarak düzeltildi (GitHub tolere ediyordu, YAML geçerli değildi).
+
+1. **`.github/workflows/build.yml`** — `build` (macos-latest, `swift build`) işi silinir; `build-windows` kalır (istenirse `build` olarak yeniden adlandırılır). `on:` tetikleri (`push: main`, `pull_request`, `workflow_dispatch`) aynı kalır.
+2. **`.github/workflows/release.yml`** — `release` (macos-latest) işi silinir. Sonuçları:
+   - `release-windows`'tan `needs: release` **kaldırılır** (yoksa iş hiç çalışmaz).
+   - `if: always() && (needs.release.result == 'success' || github.event_name == 'workflow_dispatch')` **kaldırılır**.
+   - Yayın adımı `gh release upload --clobber` yerine **`gh release create`** olur (release'i artık Windows işi açıyor): `--title "$VERSION" --notes "$RELEASE_NOTES"` + varlık listesi. Tag zaten `v*` ile tetikleniyor; `workflow_dispatch`'te yayın adımı yine atlanır (`if: startsWith(github.ref, 'refs/tags/v')`).
+   - macOS'a özgü adımlar (create-dmg, sertifika, notarize, keychain temizliği) silinir.
+3. **`README.md`** — Windows'a yazılır: indirme (`TinyHand-WindowsSetup.exe`), SmartScreen notu, kısayol tablosu, `tinyhand://` otomasyonu, bilinen sınırlar (yükseltilmiş pencereler, imleç kurtarma). macOS bölümleri ve DMG/App Store rozetleri kalkar; platform rozeti yalnız Windows.
+4. **`Updater.RepositoryUrl`** (`windows/TinyHand/Updater.cs`) — **karar gerekiyor:** yayın hangi depodan yapılacaksa o yazılır. Windows-only depo `berkayelagoz/tinyhand` olacaksa `https://github.com/berkayelagoz/tinyhand`; upstream (`nilbuild/tinyhand`) korunacaksa değişmez. Aynı değer `SettingsWindow` About linklerinde ve README indirme linklerinde de güncellenir.
+5. **`windows/PLAN.md` / `windows/PROGRESS.md`** — başa tek satır not: "macOS uygulaması M6'da çıkarıldı; aşağıdaki macOS referansları tarihsel kayıttır, davranış sözleşmeleri (state.json, URL grameri, stil kümesi, ses seti, mürekkep rengi) hâlâ geçerlidir." M1–M5 kayıtları silinmez (geçmiş).
+6. **`docs/`** (tinyhand.app sitesi) — ayrı karar: kalabilir (indirme linkleri Windows'a çevrilir) veya çıkarılır. Windows portuyla ilgisi yok, build'i etkilemez.
+
+#### Private repo kararı (14 Kasım 2026)
+
+Depo **şimdilik private kalacak**. Sonucu: Velopack `GithubSource` token'sız çalıştığı için private repodaki release'leri okuyamaz → **öz-güncelleme çalışmaz**; "Check for updates" sessizce "güncelleme yok" der (hata vermez, bu yüzden fark edilmesi zordur).
+
+Bu yüzden M6'da güncelleme yüzeyi sadeleştirildi:
+
+- Tray menüsündeki **"Check for updates…"** öğesi kaldırıldı; açılıştaki sessiz arka plan kontrolü de kaldırıldı (private repoda her açılışta boşa giden bir HTTPS denemesiydi).
+- Ayarlar → About'taki **"Check for updates…"** düğmesi ve durum satırı kaldırıldı; yerine tek satır not: "This build does not check for updates. Install a newer setup to upgrade."
+- `Updater` sınıfı (Check / DownloadAndRestart / RestartPending / IsInstalled / IsPortable / PendingRestart), `--updatecheck` tanılaması, `UpdateProgressForm` ve `VelopackApp` kancaları **kaldı** (kurulum/kaldırma kancaları ve ileride public'e geçiş için gerekli).
+
+Depo public yapılırsa: tray öğesi, About düğmesi ve `AppHost`'taki ince bağlantı (arka plan kontrolü + `OfferUpdate`/`InstallUpdate`) geri eklenir; `Updater` API'si ve `--updatecheck` değişmez. Tespit doğrulandı (14 Kasım 2026): kurulu 1.1.0 `--updatecheck` → `installed=True channel=win`, "no update (560 ms)" — hata vermiyor, sessizce güncelleme yok diyor.
+
+#### Doğrulama (çıkış kriteri)
+
+- [x] Temiz klonda `dotnet build windows/StickHand.sln -c Release` ve `dotnet test` geçer (**149/149** — M6'nın workflow sözleşme testi eklendi).
+- [x] `--m5check` **32/32**, `--m3check` PASS, `--inkcheck` 20/20, `--m4check` 71/71, e2e-m1 10/10, cursorcheck 7/7.
+- [x] `powershell -File windows/scripts/release-windows.ps1` tam varlık setini üretir: `StickHand-WindowsSetup.exe` (+ `.sha256`), `StickHand-Windows-portable.zip` (+ `.sha256`), `releases.win.json`, `StickHand-1.1.0-full.nupkg`; portable zip içinde `current/LICENSE.txt` var. Delta paketi yok — `-FetchPrevious` verilmedi (yerel turda önceki release indirilmez).
+- [x] `grep -ri "swift\|Package.swift\|Sources/TinyHand"` yalnızca tarihsel PLAN notlarını, üç görsel sözleşme yorumunu (`Ink.swift` / `Toolbar.swift` atıfları) ve yeni testin "swift yok" iddiasını döndürür; CI/README/build referansı kalmadı.
+- [x] CI: PR #1'de `build-windows` **yeşil** (build + test + self-contained publish; 14 Kasım 2026). Tag push'u henüz denenmedi — release işi ilk `v*` tag'inde görülecek. **Bulgu:** çıplak `pull_request` anahtarı yüzünden workflow **geçersizdi**; `only_windows`'a yapılan önceki push'lar 0 job'la düşüyordu (run adı `.github/workflows/build.yml` olarak görünüyordu). Düzeltme CI'ı yeniden çalışır hale getirdi.
+- [x] Kurulum turu: `--silent` kurulum → `%LOCALAPPDATA%\StickHand` (kısayollar + kaldırma kaydı) → kurulu `--updatecheck` → `--uninstall` sonrası kısayol/registry/dizin temiz. `--apply` yerel feed ile koşuldu (`TH_UPDATE_SOURCE`): 1.1.0 → `update 1.1.1 (114 MB, deltas=1)` → indirme %70/%100 → `current\StickHand.dll` **1.1.1.0**. Gerçek GitHub feed'i denenmedi (private repo, yayın yok).
+
+#### Notlar / riskler
+
+- macOS uygulaması git geçmişinde kalır (`git log -- Sources/`); geri dönmek gerekirse branch/commit'ten alınır.
+- Fork upstream'den ayrışır; upstream'den gelen değişiklikleri almak artık elle merge demektir (beklenen sonuç).
+- `windows/PLAN.md`'deki "ortak davranış sözleşmeleri" bölümü macOS referansına dayanıyor; macOS kodu gittikten sonra bu sözleşmeler **spesifikasyon** olarak kalır (state.json, URL grameri, 36 stil + lazer, 15 ses, mürekkep rengi, fade). Silinmez.
+- Asset lisansı: PNG/WAV'lar MIT kapsamında kalır; `LICENSE` iki satırıyla korunur. Yeni asset üretilirse bu not güncellenir.
+- **Repo private (14 Kasım 2026 kararı):** `berkayelagoz/stickhand` private kalıyor. Velopack `GithubSource` token'sız çalıştığı için private repoda release'leri okuyamaz → öz-güncelleme yok; güncelleme yüzeyi M6'da kaldırıldı (bkz. "Private repo kararı"). Public'e geçilirse güncelleme yüzeyi geri eklenir. Uygulamaya token gömmek alternatif değildir: token herkese dağıtılır.
+- **Sıra:** repo adı → yerel `git remote set-url` → kod rename'i (yukarıdaki tablo) → ilk release. Kod, repo'nun yeni adresini gösterdiği anda repo o adreste olmalı.
+- Fork ise: ad değişse de "forked from nilbuild/tinyhand" etiketi kalır; kendi ürünü olacaksa Settings → Leave fork network ile ayrılır (geri alınamaz).
+
+## Açık kararlar (kullanıcı)
+
+1. Karar: Sertifika satın alınmayacak (ücretsiz dağıtım). Sonuç: SmartScreen "bilinmeyen uygulama" uyarısı kullanıcı tarafından elle geçilir; AV false positive riski kabul edilir. Self-signed imza yapılmayacak (faydası yok). Bu karar gereği `uiAccess="true"` plandan çıkarıldı (imzalı ikili gerektirir); yükseltilmiş pencerelerin üstünde çizim yapılamaması kalıcı, belgelenmiş sınırlamadır.
+2. Karar: ok ucu için **Ctrl** onaylandı (14 Kasım 2026; Windows tuşu Start menüsünü açtığı için Ctrl seçilmişti, kullanıcı davranışı doğruladı).
+3. Çözüldü (macOS referansı izlenir): çift Shift click-through modunda TinyHand eli görünür kalır, gerçek imleç gizli. M1 prototipinde Windows tarafında doğrulanır.
+4. Karar: Hedef işletim sistemi yalnızca **Windows 11 x64**; Windows 10 desteklenmez ve test edilmez. Sonuç: .NET 10 destek listesindeki Windows 10 edisyon ayrıntıları takip edilmez; gereksinim ve dağıtım metinleri tek hedefle yazılır.
+5. Interact tuşu (M3): varsayılan **Alt** (macOS ⌥ karşılığı). Windows'ta tek başına Alt tap'i alttaki uygulamanın menü çubuğunu vurgular; modifier'ı yutmak sistem tuş durumunu kilitlediği için bu davranış kabul edilir ve M4 ayarlarından tuş değiştirilebilir (Ctrl / Shift / kapalı) *(M4'te uygulandı: Ayarlar → General → Hold to use the app)*.
+6. Çözüldü (14 Kasım 2026): ürün adı **StickHand** olur ve yayın kendi deposundan yapılır (`berkayelagoz/stickhand`). İsim değişikliği upstream adını kullanmayı bıraktığı için "upstream'den yayınlama" seçeneği düştü; `Updater.RepositoryUrl`, README linkleri ve `docs/` yeni ada göre güncellenir. Ayrıntı: M6 → "İsim kararı".

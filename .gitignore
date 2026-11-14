@@ -1,7 +1,2 @@
-.DS_Store
-.build/
-.swiftpm/
 dist/
-*.dmg
 *.zip
-assets/unused/

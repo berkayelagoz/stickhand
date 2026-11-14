@@ -1,0 +1,11 @@
+{
+  "packId": "StickHand",
+  "packTitle": "StickHand",
+  "packAuthors": "Kamran Ahmed",
+  "channel": "win",
+  "mainExe": "StickHand.exe",
+  "runtime": "win-x64",
+  "icon": "StickHand/assets/appicon.ico",
+  "setupName": "StickHand-WindowsSetup.exe",
+  "portableName": "StickHand-Windows-portable.zip"
+}

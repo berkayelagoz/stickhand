@@ -1,62 +1,81 @@
 <img src="./.github/logo.png" width="80" />
 
-# TinyHand
+# StickHand
 
-[![Latest release](https://img.shields.io/github/v/release/nilbuild/tinyhand?display_name=tag&sort=semver&cacheSeconds=3600)](https://github.com/nilbuild/tinyhand/releases/latest)
-[![Platform: macOS](https://img.shields.io/badge/platform-macOS-lightgrey)](https://tinyhand.app)
+[![Latest release](https://img.shields.io/github/v/release/berkayelagoz/stickhand?display_name=tag&sort=semver&cacheSeconds=3600)](https://github.com/berkayelagoz/stickhand/releases/latest)
+[![Platform: Windows](https://img.shields.io/badge/platform-Windows%2011%20x64-0078D4)](https://github.com/berkayelagoz/stickhand/releases/latest)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](./LICENSE)
 
-A tiny hand on a stick that points at things on your Mac screen.
+A tiny hand on a stick that points at things on your Windows screen.
 
-<img src="./.github/banner.jpg" alt="TinyHand: a tiny hand for your Mac" />
+[![Download for Windows](https://img.shields.io/badge/Download_for_Windows-0078D4?style=for-the-badge&logo=windows&logoColor=white)](https://github.com/berkayelagoz/stickhand/releases/latest/download/StickHand-WindowsSetup.exe)
 
-[![Download for macOS](https://img.shields.io/badge/Download_for_macOS-000000?style=for-the-badge&logo=apple&logoColor=white)](https://github.com/nilbuild/tinyhand/releases/latest/download/TinyHand.dmg)
-[![Visit website](https://img.shields.io/badge/Visit_website-ffffff?style=for-the-badge&logo=safari&logoColor=black)](https://tinyhand.app)
-
-macOS 13 or later, Apple Silicon and Intel.
+Windows 11 x64.
 
 ## Install
 
-Open `TinyHand.dmg`, drag TinyHand to Applications and allow **Accessibility** when asked. It needs that to turn your clicks into taps. TinyHand updates itself.
+Download `StickHand-WindowsSetup.exe` and run it. It installs per-user (no administrator
+rights). `StickHand-Windows-portable.zip` is the unpacked build for people who would rather
+not install anything.
+
+This build does not update itself: the repository is private, so the updater cannot read its
+releases. To upgrade, download a newer setup and run it over the installed copy.
+
+The installer is not code-signed, so SmartScreen shows **Windows protected your PC** the
+first time: choose **More info → Run anyway**. Some antivirus products flag the global
+mouse and keyboard hooks StickHand needs — those hooks are what turn your clicks into taps.
 
 ## Use
 
 | | |
 |---|---|
-| Click the menu bar icon, or **⌃⌥H** | Turn the pointer on or off |
-| Right-click the menu bar icon | Menu and Settings |
+| Click the tray icon, or **Ctrl+Alt+H** | Turn the pointer on or off |
+| Right-click the tray icon | Menu, Settings, Welcome |
 | Click | Tap (nothing underneath gets clicked) |
 | Hold and drag | Draw on the screen |
-| Hold **⌘** while drawing | Add an arrowhead to the end of the line |
-| **⌃⌥X** | Clear the drawing |
+| Hold **Ctrl** while drawing | Add an arrowhead to the end of the line |
+| **Ctrl+Alt+X** | Clear the drawing |
+| **Ctrl+Alt+S**, **Ctrl+Alt+F** | Cycle the smoothing level, toggle the ink fade |
 | **Esc** | Clear everything and turn the pointer off |
+| **Ctrl+Alt+Q** | Quit |
 
-While the pointer is on, a small toolbar at the bottom of the screen lets you pick one of
-36 hands or a laser dot, mute the tap sound, or exit.
+The toolbar sits at the top of the primary monitor: 36 hands, the laser dot, the tap-sound
+toggle and exit. Hold **Alt** to use the app underneath without leaving drawing mode, or
+press **Shift** twice to latch click-through; both are configurable in Settings.
 
 ## Automation
 
-Launchers like Raycast or Alfred, and shell scripts, can control TinyHand with
-`tinyhand://` links. Use `open -g` so TinyHand doesn't take focus:
+Launchers and shell scripts can control StickHand with `stickhand://` links:
 
-```sh
-open -g tinyhand://toggle
+```powershell
+Start-Process "stickhand://toggle"
 ```
 
 | Link | Action |
 |---|---|
-| `tinyhand://on`, `tinyhand://off`, `tinyhand://toggle` | Turn the pointer on, off, or flip it |
-| `tinyhand://clear` | Clear the drawing |
-| `tinyhand://style/<id>` | Switch to a hand (or `laser`) and turn the pointer on |
-| `tinyhand://sound/on`, `/off`, `/toggle` | Tap sound for the current pointer |
+| `stickhand://on`, `stickhand://off`, `stickhand://toggle` | Turn the pointer on, off, or flip it |
+| `stickhand://clear` | Clear the drawing |
+| `stickhand://style/<id>` | Switch to a hand (or `laser`) and turn the pointer on |
+| `stickhand://sound/on`, `/off`, `/toggle` | Tap sound for the current pointer |
 
-While TinyHand runs, it keeps its current state in
-`~/Library/Application Support/TinyHand/state.json`: whether the pointer is on, the
-selected style, whether sound is on, and every style with its `id`, name and type
-(`hand`, `custom` or `laser`). The file is removed when TinyHand quits. It also
-records the app's `pid`, so a file left behind by a crash can be detected.
+While StickHand runs, it keeps its current state in `%APPDATA%\StickHand\state.json`:
+whether the pointer is on, the selected style, whether sound is on, and every style with
+its `id`, name and type (`hand`, `custom` or `laser`). The file is removed when StickHand
+quits. It also records the app's `pid`, so a file left behind by a crash can be detected.
 
-If TinyHand isn't running, opening any link launches it and then runs the command.
+If StickHand isn't running, opening any link launches it and then runs the command.
+
+## Known limits
+
+StickHand cannot draw over elevated (administrator) windows. The real cursor is hidden with
+a global cursor override while the pointer is on; a normal exit always restores it, but if
+the app is killed hard, sign out and back in (or restart Explorer) to get the cursor back.
+
+## Credits
+
+StickHand is a Windows port of [TinyHand](https://github.com/nilbuild/tinyhand) by Kamran
+Ahmed. The hand sprites, the tap sounds and the behaviour contracts come from that project;
+the Windows application is a separate implementation. See [LICENSE](LICENSE).
 
 ## License
 

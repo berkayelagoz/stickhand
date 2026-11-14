@@ -1,0 +1,21 @@
+{
+  "Machine": "DESKTOP-IGOSACC",
+  "OsVersion": "Microsoft Windows NT 10.0.26300.0",
+  "DisplayMode": "3840x2160 @ 60 Hz",
+  "ProcessorCount": 16,
+  "WindowWidth": 3840,
+  "WindowHeight": 2160,
+  "TargetFps": 120,
+  "Seconds": 6,
+  "FramesRendered": 398,
+  "AchievedFps": 66.26738844617759,
+  "RenderAvgMs": 11.455495226130658,
+  "RenderP95Ms": 14.2975,
+  "UlwAvgMs": 3.633410552763818,
+  "UlwP95Ms": 6.1142,
+  "TotalAvgMs": 15.088905778894473,
+  "TotalP95Ms": 18.2901,
+  "TotalMaxMs": 28.0381,
+  "CpuPercent": 6.276306321702396,
+  "Scene": "realistic"
+}

@@ -1,0 +1,174 @@
+using System.Drawing;
+using System.Runtime.InteropServices;
+
+namespace StickHand.Interop;
+
+/// <summary>
+/// Raw Win32 overlay window: one per monitor. Created with
+/// WS_EX_NOACTIVATE | WS_EX_TOPMOST | WS_EX_TOOLWINDOW plus either
+/// WS_EX_LAYERED (M1 prototype/spike: UpdateLayeredWindow presentation) or
+/// WS_EX_NOREDIRECTIONBITMAP (M1.5: DirectComposition presentation).
+///
+/// Hit-testing notes (verified by the M1 prototype, see PLAN.md):
+/// - Non-layered windows are hit-tested by their full rect regardless of pixels,
+///   so a NOREDIRECTIONBITMAP overlay receives WM_SETCURSOR over the whole monitor
+///   without the M1 alpha=1 background trick.
+/// - Click-through is a window-style-level decision: WS_EX_TRANSPARENT removes the
+///   window from hit-testing entirely, including over opaque hand pixels.
+/// </summary>
+public sealed class OverlayWindow : IDisposable
+{
+    private const string ClassName = "StickHandOverlay";
+
+    private static readonly WndProcDelegate WndProc = OverlayWndProc;
+    private static ushort s_classAtom;
+    private static readonly object s_classLock = new();
+
+    public IntPtr Handle { get; private set; }
+    public Rectangle Bounds { get; private set; }
+
+    /// <summary>Return true to hide the real cursor while it is over this window (WM_SETCURSOR).</summary>
+    public event Func<OverlayWindow, bool>? CursorHidden;
+
+    /// <summary>Plane change / mode change notification (WM_DISPLAYCHANGE, WM_DPICHANGED).</summary>
+    public event Action<OverlayWindow, uint>? SystemMessage;
+
+    private OverlayWindow(IntPtr handle, Rectangle bounds)
+    {
+        Handle = handle;
+        Bounds = bounds;
+    }
+
+    /// <param name="layered">
+    /// true: WS_EX_LAYERED for the M1 GDI+/UpdateLayeredWindow prototype and the
+    /// spike harness. false: WS_EX_NOREDIRECTIONBITMAP for the M1.5 DirectComposition
+    /// presentation (the window has no redirection surface; pixels come from
+    /// the DirectComposition visual bound to the swap chain).
+    /// </param>
+    public static OverlayWindow Create(Rectangle bounds, bool layered = true)
+    {
+        lock (s_classLock)
+        {
+            if (s_classAtom == 0)
+            {
+                var wc = new WNDCLASSEX
+                {
+                    cbSize = (uint)Marshal.SizeOf<WNDCLASSEX>(),
+                    style = 0,
+                    lpfnWndProc = Marshal.GetFunctionPointerForDelegate(WndProc),
+                    hInstance = Kernel32.GetModuleHandle(null),
+                    lpszMenuName = "",
+                    lpszClassName = ClassName,
+                };
+                s_classAtom = User32.RegisterClassEx(ref wc);
+                if (s_classAtom == 0)
+                    throw new InvalidOperationException($"RegisterClassEx failed: {Marshal.GetLastWin32Error()}");
+            }
+        }
+
+        uint exStyle = Win32.WS_EX_NOACTIVATE | Win32.WS_EX_TOPMOST | Win32.WS_EX_TOOLWINDOW
+                       | (layered ? Win32.WS_EX_LAYERED : Win32.WS_EX_NOREDIRECTIONBITMAP);
+        IntPtr handle = User32.CreateWindowEx(
+            exStyle, ClassName, "", Win32.WS_POPUP,
+            bounds.X, bounds.Y, bounds.Width, bounds.Height,
+            IntPtr.Zero, IntPtr.Zero, Kernel32.GetModuleHandle(null), IntPtr.Zero);
+        if (handle == IntPtr.Zero)
+            throw new InvalidOperationException($"CreateWindowEx failed: {Marshal.GetLastWin32Error()}");
+
+        var window = new OverlayWindow(handle, bounds);
+        s_windows[handle] = window;
+        return window;
+    }
+
+    private static readonly Dictionary<IntPtr, OverlayWindow> s_windows = new();
+
+    private static IntPtr OverlayWndProc(IntPtr hWnd, uint msg, IntPtr wParam, IntPtr lParam)
+    {
+        OverlayWindow? window = null;
+        lock (s_windows) s_windows.TryGetValue(hWnd, out window);
+        if (window is null) return User32.DefWindowProc(hWnd, msg, wParam, lParam);
+
+        switch (msg)
+        {
+            case Win32.WM_NCHITTEST:
+                // WS_EX_TRANSPARENT only removes a *layered* window from
+                // hit-testing (verified by the M1.5 e2e run); with
+                // WS_EX_NOREDIRECTIONBITMAP the window keeps taking the hit and
+                // silently swallows clicks. HTTRANSPARENT is the DirectComposition
+                // era equivalent: the hit continues to the window below.
+                if (window._clickThrough) return Win32.HTTRANSPARENT;
+                break;
+            case Win32.WM_SETCURSOR:
+                // LOWORD(lParam) hit-test code; HTCLIENT = 1.
+                if ((lParam.ToInt64() & 0xFFFF) == 1)
+                {
+                    bool hidden = window.CursorHidden?.Invoke(window) ?? false;
+                    if (hidden)
+                    {
+                        User32.SetCursor(IntPtr.Zero);
+                        return (IntPtr)1;
+                    }
+                }
+                break;
+            case Win32.WM_DPICHANGED:
+                window.SystemMessage?.Invoke(window, (uint)(wParam.ToInt64() & 0xFFFF));
+                return IntPtr.Zero;
+            case Win32.WM_DISPLAYCHANGE:
+                window.SystemMessage?.Invoke(window, msg);
+                return IntPtr.Zero;
+            case Win32.WM_DESTROY:
+                lock (s_windows) s_windows.Remove(hWnd);
+                break;
+        }
+        return User32.DefWindowProc(hWnd, msg, wParam, lParam);
+    }
+
+    public void Show() => User32.ShowWindow(Handle, Win32.SW_SHOWNOACTIVATE);
+
+    public void Hide() => User32.ShowWindow(Handle, Win32.SW_HIDE);
+
+    /// <summary>Move/resize the overlay to new monitor bounds.</summary>
+    public void MoveTo(Rectangle bounds)
+    {
+        Bounds = bounds;
+        User32.SetWindowPos(Handle, IntPtr.Zero, bounds.X, bounds.Y, bounds.Width, bounds.Height,
+            Win32.SWP_NOZORDER | Win32.SWP_NOACTIVATE);
+    }
+
+    private bool _clickThrough;
+
+    /// <summary>
+    /// Toggle click-through. The M1-proven pair is WS_EX_TRANSPARENT|WS_EX_LAYERED:
+    /// on a NOREDIRECTIONBITMAP (DirectComposition) window WS_EX_TRANSPARENT alone
+    /// does NOT exclude the window from hit-testing (verified in the M1.5 e2e run:
+    /// clicks silently landed on the overlay). Adding WS_EX_LAYERED restores the
+    /// classic layered hit-test exclusion cross-process while the DComp visual
+    /// keeps rendering (verified by pixel probe). The WM_NCHITTEST/HTTRANSPARENT
+    /// answer stays as an in-process backstop.
+    /// The setter may be called from the hook thread; SetWindowLong on extended
+    /// styles does not send window messages, so this is benign cross-thread.
+    /// </summary>
+    public bool ClickThrough
+    {
+        get => _clickThrough;
+        set
+        {
+            if (_clickThrough == value) return;
+            int exStyle = User32.GetWindowLong(Handle, Win32.GWL_EXSTYLE);
+            exStyle = value
+                ? exStyle | unchecked((int)(Win32.WS_EX_TRANSPARENT | Win32.WS_EX_LAYERED))
+                : exStyle & ~unchecked((int)(Win32.WS_EX_TRANSPARENT | Win32.WS_EX_LAYERED));
+            User32.SetWindowLong(Handle, Win32.GWL_EXSTYLE, exStyle);
+            _clickThrough = value;
+        }
+    }
+
+    public void Dispose()
+    {
+        if (Handle != IntPtr.Zero)
+        {
+            User32.DestroyWindow(Handle);
+            Handle = IntPtr.Zero;
+        }
+    }
+}
