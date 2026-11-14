@@ -71,6 +71,11 @@ if (-not (Test-Path (Join-Path $publishDir $config.mainExe))) {
     throw "$publishDir does not contain $($config.mainExe); run without -NoPublish first"
 }
 
+# MIT: the notice travels with the binary. The portable bundle carries the file next to
+# the exe; the installer shows it on its license page.
+$licensePath = Join-Path $repoRoot "LICENSE"
+Copy-Item $licensePath (Join-Path $publishDir "LICENSE.txt") -Force
+
 New-Item -ItemType Directory -Force -Path $outputPath | Out-Null
 
 if ($FetchPrevious) {
@@ -106,6 +111,7 @@ $vpkArgs = @(
     "--channel", $Channel,
     "--runtime", $config.runtime,
     "--icon", (Join-Path $windowsRoot $config.icon),
+    "--instLicense", $licensePath,
     "--outputDir", $outputPath,
     "--delta", "BestSpeed"
 )
