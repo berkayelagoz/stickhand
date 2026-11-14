@@ -118,7 +118,7 @@ Güncelleme kuralı: bir madde bitince `[x]` yapılır, tarih ve kısa not eklen
 - [x] **M7.3 — Release dry-run.** `v1.1.0` ve `v1.1.1` tag'leri → `release.yml` uçtan uca (publish → `vpk pack` → `gh release create`). v1.1.0: 6 varlık; v1.1.1: delta dahil 8 varlık (`StickHand-1.1.1-delta.nupkg` 125 KB). Gerçek feed: kurulu 1.1.0 `--updatecheck` → `update 1.1.1 (114 MB, deltas=1, 1759 ms)` → `--apply` → %100 → `current\StickHand.dll` **1.1.1.0** → "no update" → `--uninstall` temiz. **Bulgu/düzeltme:** ilk deneme `release-windows.ps1`'de düştü — hiç release yokken `gh release list` `[]` döndürüyor, `@($null)` tek elemanlı dizi oluyor ve `Set-StrictMode -Version Latest` `$_.tagName`'de patlıyordu; liste artık savunmalı kuruluyor (fdd4fa7), tag yeni commit'e taşındı.
 - [ ] M7.4 — README görsel
 - [ ] M7.5 — docs/ alan adı kararı
-- [ ] M7.6 — Public hijyen
+- [x] **M7.6 — Public hijyen.** Secret scanning açık, **0 uyarı**. `main` koruması: force-push ve silme kapalı (PR zorunluluğu bilinçli olarak açılmadı — doğrudan push akışı korunuyor). Issue/PR şablonları opsiyonel, yapılmadı.
 
 ## Açık kararlar
 - [x] Ok ucu tuşu: **Ctrl** onaylandı (14 Kasım 2026 — kullanıcı: "ok ucu düzgün çalışıyor")
