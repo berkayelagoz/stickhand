@@ -87,12 +87,20 @@ if ($FetchPrevious) {
         Write-Host "    gh CLI not found; skipping (no delta packages)"
     } else {
         $currentTag = "v$Version"
-        $releases = gh release list --limit 10 --json tagName 2>$null | ConvertFrom-Json
-        $previous = ($releases | Where-Object { $_.tagName -ne $currentTag } | Select-Object -First 1).tagName
+        # The first release has no predecessors: gh prints [] and ConvertFrom-Json yields
+        # nothing, so the list is built defensively — StrictMode rejects $null.tagName.
+        $releases = @()
+        $listed = gh release list --limit 10 --json tagName 2>$null
+        if ($LASTEXITCODE -eq 0 -and $listed) {
+            $parsed = $listed | ConvertFrom-Json
+            # @($null) is a one-element array, which StrictMode then fails on.
+            if ($parsed) { $releases = @($parsed) }
+        }
+        $previous = $releases | Where-Object { $_.tagName -ne $currentTag } | Select-Object -First 1
         if ($previous) {
-            Write-Host "    previous release: $previous"
-            gh release download $previous --pattern "*.nupkg" --dir $outputPath --clobber 2>$null
-            if ($LASTEXITCODE -ne 0) { Write-Host "    no packages in $previous (first Windows release)" }
+            Write-Host "    previous release: $($previous.tagName)"
+            gh release download $previous.tagName --pattern "*.nupkg" --dir $outputPath --clobber 2>$null
+            if ($LASTEXITCODE -ne 0) { Write-Host "    no packages in $($previous.tagName) (first Windows release)" }
         } else {
             Write-Host "    no previous release found"
         }
